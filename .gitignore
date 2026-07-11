@@ -1,0 +1,91 @@
+# =========================
+# Qt Creator 用户配置
+# =========================
+*.user
+*.user.*
+*.autosave
+
+# =========================
+# 构建目录
+# =========================
+build/
+build-*/
+cmake-build-*/
+out/
+debug/
+release/
+
+# =========================
+# CMake 生成文件
+# =========================
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+Makefile
+
+# =========================
+# qmake 生成文件
+# =========================
+.qmake.stash
+.qmake.cache
+Makefile.*
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# =========================
+# 编译产生的目标文件
+# =========================
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.out
+
+# =========================
+# 调试与临时文件
+# =========================
+*.log
+*.tmp
+*.swp
+*.swo
+core
+core.*
+
+# =========================
+# 其他 IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# 操作系统文件
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# 第三方库
+# =========================
+third_party/ffmpeg/*
+third_party/onnxruntime/*
+
+# =========================
+# 项目内预编译第三方库例外
+# =========================
+# 上面的 *.lib / *.dll 会忽略 third_party 中的运行库。
+# 若决定将这些二进制依赖提交到仓库，保留下面的例外规则；
+# 更大的二进制文件建议使用 Git LFS。
+# !third_party/ffmpeg/lib/*.lib
+# !third_party/ffmpeg/bin/*.dll
+# !third_party/onnxruntime/lib/*.lib
+# !third_party/onnxruntime/lib/*.dll
+# !third_party/onnxruntime/bin/*.dll
