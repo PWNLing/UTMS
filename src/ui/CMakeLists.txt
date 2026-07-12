@@ -8,6 +8,12 @@ set(PROJECT_UI_TARGET "${PROJECT_NAME}_ui")
 # 当前 UI 模块编译为静态库。
 # 以后新增窗口、对话框或自定义控件时，继续在此列表中添加文件。
 add_library(${PROJECT_UI_TARGET} STATIC
+    MapPanel.cpp
+    MapPanel.h
+    MapWebBridge.cpp
+    MapWebBridge.h
+    OnlineMapWidget.cpp
+    OnlineMapWidget.h
     mainwindow.cpp
     mainwindow.h
 )
@@ -41,6 +47,9 @@ target_include_directories(${PROJECT_UI_TARGET}
 target_link_libraries(${PROJECT_UI_TARGET}
     PUBLIC
         ${PROJECT_NAMESPACE}::network
+        ${PROJECT_NAMESPACE}::map
+        Qt${QT_VERSION_MAJOR}::WebChannel
+        Qt${QT_VERSION_MAJOR}::WebEngineWidgets
         Qt${QT_VERSION_MAJOR}::Widgets
 )
 

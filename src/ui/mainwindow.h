@@ -3,6 +3,7 @@
 #include <QMainWindow>
 
 class QCloseEvent;
+class QComboBox;
 class QLabel;
 class QPushButton;
 class QSpinBox;
@@ -10,6 +11,7 @@ class QTableWidget;
 class QThread;
 
 namespace utms {
+class MapPanel;
 class UdpReceiver;
 enum class UdpStatus;
 struct RadarFrame;
@@ -34,7 +36,7 @@ protected:
 private slots:
     void handleUdpStatusChanged(utms::UdpStatus status, const QString &detail);
     void handleUdpWorkerStopped();
-    void updateTrackTable(const utms::RadarFrame &frame);
+    void updateCurrentFrame(const utms::RadarFrame &frame);
 
 private:
     void setupUi();
@@ -45,6 +47,9 @@ private:
     QPushButton *stop_button_ = nullptr;
     QLabel *status_label_ = nullptr;
     QTableWidget *track_table_ = nullptr;
+    utms::MapPanel *map_panel_ = nullptr;
+    QComboBox *map_layer_combo_box_ = nullptr;
+    QPushButton *locate_radar_button_ = nullptr;
     QThread *udp_thread_ = nullptr;
     utms::UdpReceiver *udp_receiver_ = nullptr;
     bool shutdown_started_ = false;

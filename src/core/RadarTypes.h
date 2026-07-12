@@ -44,3 +44,4 @@ struct RadarFrame {
 }  // namespace utms
 
 Q_DECLARE_METATYPE(utms::RadarFrame)
+Q_DECLARE_METATYPE(utms::TargetType)

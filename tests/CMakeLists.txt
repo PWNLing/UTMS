@@ -12,6 +12,7 @@ add_executable(${PROJECT_TEST_TARGET}
 target_link_libraries(${PROJECT_TEST_TARGET}
     PRIVATE
         ${PROJECT_NAMESPACE}::core
+        ${PROJECT_NAMESPACE}::map
         ${PROJECT_NAMESPACE}::network
         Qt${QT_VERSION_MAJOR}::Test
 )

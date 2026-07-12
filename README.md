@@ -4,7 +4,7 @@ GUET (Guilin University of Electronic Technology) UTMS is a Qt Widgets radar tra
 
 ## Build
 
-Requirements: CMake, Qt 6 with Core/Network/Widgets/Test modules, and a C++17 compiler. The acceptance platform is Windows 10/11 with Qt 6.8 LTS and MSVC 2022 64-bit.
+Requirements: CMake, Qt 6 with Core/Network/Widgets/WebEngineWidgets/WebChannel/Test modules, and a C++17 compiler. The acceptance platform is Windows 10/11 with Qt 6.8 LTS and MSVC 2022 64-bit.
 
 ```powershell
 cmake -S . -B build -DPROJECT_BUILD_TESTS=ON
@@ -13,6 +13,12 @@ ctest --test-dir build -C Debug --output-on-failure
 ```
 
 Run `UTMS`, leave the default UDP port at `10000`, and click **启动监听**. The status is red while stopped, yellow while listening without recent valid data, and green after an accepted frame.
+
+## Online Amap
+
+Copy `config/amap.example.json` to `config/amap.json`, then enter an Amap Web JavaScript API Key and its security code. The real file is ignored by Git and is copied beside the executable for local builds. Without a complete configuration, the online-map area displays an explicit error; it does not switch map modes automatically.
+
+The online map starts in street mode at longitude `110.416819`, latitude `25.311724`, zoom `17` (allowed range `15` to `19`). Use the map controls on the right to switch to satellite imagery or locate the latest valid radar position.
 
 ## UDP Simulator
 

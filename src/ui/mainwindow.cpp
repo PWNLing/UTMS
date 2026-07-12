@@ -5,10 +5,13 @@
 
 #include <QAbstractItemView>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QSplitter>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QThread>
 #include <QVBoxLayout>
@@ -16,6 +19,7 @@
 
 #include "core/RadarTypes.h"
 #include "network/UdpReceiver.h"
+#include "ui/MapPanel.h"
 
 namespace {
 
@@ -193,8 +197,9 @@ void MainWindow::handleUdpStatusChanged(utms::UdpStatus status, const QString &d
     status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
 }
 
-void MainWindow::updateTrackTable(const utms::RadarFrame &frame)
+void MainWindow::updateCurrentFrame(const utms::RadarFrame &frame)
 {
+    map_panel_->setFrame(frame);
     track_table_->setRowCount(frame.tracks.size());
 
     for (qsizetype row = 0; row < frame.tracks.size(); ++row) {
@@ -230,30 +235,49 @@ void MainWindow::updateTrackTable(const utms::RadarFrame &frame)
 void MainWindow::setupUi()
 {
     setWindowTitle(tr("GUET-UTMS 实时雷达显示"));
-    resize(1100, 700);
+    resize(1400, 800);
     setMinimumSize(800, 500);
 
     auto *central_widget = new QWidget(this);
     auto *main_layout = new QVBoxLayout(central_widget);
+    auto *content_splitter = new QSplitter(Qt::Horizontal, central_widget);
+    map_panel_ = new utms::MapPanel(content_splitter);
+    map_panel_->setMinimumSize(400, 300);
+
+    auto *data_splitter = new QSplitter(Qt::Vertical, content_splitter);
+    auto *configuration_tabs = new QTabWidget(data_splitter);
+    auto *system_config_widget = new QWidget(configuration_tabs);
+    auto *system_config_layout = new QVBoxLayout(system_config_widget);
     auto *control_layout = new QHBoxLayout();
 
-    auto *port_label = new QLabel(tr("UDP 端口"), central_widget);
-    port_spin_box_ = new QSpinBox(central_widget);
+    auto *port_label = new QLabel(tr("UDP 端口"), system_config_widget);
+    port_spin_box_ = new QSpinBox(system_config_widget);
     port_spin_box_->setRange(1, 65'535);
     port_spin_box_->setValue(10'000);
-    start_button_ = new QPushButton(tr("启动监听"), central_widget);
-    stop_button_ = new QPushButton(tr("停止监听"), central_widget);
-    status_label_ = new QLabel(central_widget);
+    start_button_ = new QPushButton(tr("启动监听"), system_config_widget);
+    stop_button_ = new QPushButton(tr("停止监听"), system_config_widget);
+    status_label_ = new QLabel(system_config_widget);
+    map_layer_combo_box_ = new QComboBox(system_config_widget);
+    map_layer_combo_box_->addItem(tr("街道图"), static_cast<int>(utms::OnlineMapLayer::kStreet));
+    map_layer_combo_box_->addItem(tr("卫星图"), static_cast<int>(utms::OnlineMapLayer::kSatellite));
+    locate_radar_button_ = new QPushButton(tr("定位雷达"), system_config_widget);
 
     control_layout->addWidget(port_label);
     control_layout->addWidget(port_spin_box_);
     control_layout->addWidget(start_button_);
     control_layout->addWidget(stop_button_);
-    control_layout->addSpacing(20);
+    control_layout->addSpacing(12);
     control_layout->addWidget(status_label_);
     control_layout->addStretch();
 
-    track_table_ = new TrackTableWidget(central_widget);
+    auto *map_control_layout = new QHBoxLayout();
+    map_control_layout->addWidget(new QLabel(tr("在线图层"), system_config_widget));
+    map_control_layout->addWidget(map_layer_combo_box_);
+    map_control_layout->addWidget(locate_radar_button_);
+    map_control_layout->addStretch();
+
+    track_table_ = new TrackTableWidget(data_splitter);
+    track_table_->setMinimumSize(350, 200);
     track_table_->setColumnCount(7);
     track_table_->setHorizontalHeaderLabels(
         {tr("航迹 ID"), tr("类别"), tr("经度"), tr("纬度"), tr("速度 (m/s)"), tr("距离 (m)"), tr("时间")});
@@ -262,14 +286,33 @@ void MainWindow::setupUi()
     track_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     track_table_->setAlternatingRowColors(true);
 
-    main_layout->addLayout(control_layout);
-    main_layout->addWidget(track_table_);
+    system_config_layout->addLayout(control_layout);
+    system_config_layout->addLayout(map_control_layout);
+    system_config_layout->addStretch();
+    configuration_tabs->addTab(system_config_widget, tr("系统配置"));
+
+    data_splitter->addWidget(track_table_);
+    data_splitter->addWidget(configuration_tabs);
+    data_splitter->setStretchFactor(0, 55);
+    data_splitter->setStretchFactor(1, 45);
+    data_splitter->setSizes({440, 360});
+
+    content_splitter->addWidget(map_panel_);
+    content_splitter->addWidget(data_splitter);
+    content_splitter->setStretchFactor(0, 65);
+    content_splitter->setStretchFactor(1, 35);
+    content_splitter->setSizes({910, 490});
+    main_layout->addWidget(content_splitter);
     setCentralWidget(central_widget);
 
     connect(start_button_, &QPushButton::clicked, this, [this]() {
         emit startListeningRequested(static_cast<quint16>(port_spin_box_->value()));
     });
     connect(stop_button_, &QPushButton::clicked, this, &MainWindow::stopListeningRequested);
+    connect(map_layer_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        map_panel_->setOnlineLayer(static_cast<utms::OnlineMapLayer>(map_layer_combo_box_->itemData(index).toInt()));
+    });
+    connect(locate_radar_button_, &QPushButton::clicked, this, [this]() { map_panel_->locateRadar(); });
 }
 
 void MainWindow::setupUdpWorker()
@@ -288,7 +331,7 @@ void MainWindow::setupUdpWorker()
     connect(this, &MainWindow::stopListeningRequested, udp_receiver_, &utms::UdpReceiver::stopListening);
     connect(this, &MainWindow::shutdownUdpWorkerRequested, udp_receiver_, &utms::UdpReceiver::shutdown);
     connect(udp_receiver_, &utms::UdpReceiver::statusChanged, this, &MainWindow::handleUdpStatusChanged);
-    connect(udp_receiver_, &utms::UdpReceiver::frameReceived, this, &MainWindow::updateTrackTable);
+    connect(udp_receiver_, &utms::UdpReceiver::frameReceived, this, &MainWindow::updateCurrentFrame);
     connect(udp_receiver_, &utms::UdpReceiver::stopped, this, &MainWindow::handleUdpWorkerStopped);
     connect(udp_thread_, &QThread::finished, udp_receiver_, &QObject::deleteLater);
     connect(udp_thread_, &QThread::finished, this, [this]() {

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UTMS 在线地图</title>
+    <style>
+        html, body, #map { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+        #message { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                   padding: 24px; z-index: 1000; background: #f5f5f5; color: #b03a2e;
+                   font: 15px "Microsoft YaHei", sans-serif; text-align: center; }
+        .point { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,.9);
+                 box-shadow: 0 1px 3px rgba(0,0,0,.45); box-sizing: border-box; }
+    </style>
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+<div id="map"></div>
+<div id="message">正在加载在线地图…</div>
+<script>
+(() => {
+    const targetMarkers = new Map();
+    let bridge;
+    let map;
+    let radarMarker;
+    let satelliteLayer;
+    let roadNetLayer;
+    let loadTimeout;
+
+    const showError = (message) => {
+        clearTimeout(loadTimeout);
+        const element = document.getElementById('message');
+        element.textContent = message;
+        element.style.display = 'flex';
+        if (bridge) bridge.reportMapError(message);
+    };
+
+    const position = value => [value.longitude, value.latitude];
+    const markerContent = color => `<div class="point" style="background:${color}"></div>`;
+    const measurement = value => value === null ? '--' : Number(value).toFixed(2);
+    const tooltip = target => `航迹 ID: ${target.trackId}<br>类别: ${target.type}<br>`
+        + `经度: ${target.longitude.toFixed(7)}<br>纬度: ${target.latitude.toFixed(7)}<br>`
+        + `速度: ${measurement(target.velocity)}<br>距离: ${measurement(target.distance)}<br>`
+        + `首次出现: ${target.firstSeen}`;
+
+    const upsertTarget = target => {
+        let entry = targetMarkers.get(String(target.trackId));
+        if (!entry) {
+            const marker = new AMap.Marker({anchor: 'center', content: markerContent(target.color),
+                position: position(target), zIndex: 120, extData: target.trackId});
+            marker.on('click', () => bridge.reportTargetClicked(String(marker.getExtData())));
+            const info = new AMap.InfoWindow({offset: new AMap.Pixel(0, -8)});
+            marker.on('mouseover', () => { info.setContent(tooltip(entry.target)); info.open(map, marker.getPosition()); });
+            marker.on('mouseout', () => info.close());
+            map.add(marker);
+            entry = {marker, info, target};
+            targetMarkers.set(String(target.trackId), entry);
+        }
+        entry.target = target;
+        entry.marker.setPosition(position(target));
+        entry.marker.setContent(markerContent(target.color));
+    };
+
+    const updateRadar = radar => {
+        if (!radarMarker) {
+            radarMarker = new AMap.Marker({anchor: 'center', content: markerContent('#000000'),
+                position: position(radar), zIndex: 130});
+            map.add(radarMarker);
+        } else {
+            radarMarker.setPosition(position(radar));
+        }
+    };
+
+    const setLayer = layer => {
+        if (layer === 'satellite') {
+            if (!satelliteLayer) satelliteLayer = new AMap.TileLayer.Satellite();
+            if (!roadNetLayer) roadNetLayer = new AMap.TileLayer.RoadNet();
+            map.add([satelliteLayer, roadNetLayer]);
+        } else {
+            if (satelliteLayer) map.remove(satelliteLayer);
+            if (roadNetLayer) map.remove(roadNetLayer);
+        }
+    };
+
+    const initializeMap = state => {
+        map.setZoomAndCenter(state.zoom, position(state.center), true);
+        setLayer(state.layer);
+        if (state.radar) updateRadar(state.radar);
+        state.targets.forEach(upsertTarget);
+    };
+
+    const applyUpdate = update => {
+        update.removedTrackIds.forEach(trackId => {
+            const entry = targetMarkers.get(String(trackId));
+            if (entry) { map.remove(entry.marker); entry.info.close(); targetMarkers.delete(String(trackId)); }
+        });
+        update.upsertedTargets.forEach(upsertTarget);
+        if (update.radar) updateRadar(update.radar);
+        if (update.automaticCenter) map.setCenter(position(update.automaticCenter), true);
+    };
+
+    new QWebChannel(qt.webChannelTransport, channel => {
+        bridge = channel.objects.mapBridge;
+        window._AMapSecurityConfig = {securityJsCode: bridge.securityCode};
+        bridge.initialStateAvailable.connect(initializeMap);
+        bridge.mapUpdateAvailable.connect(applyUpdate);
+        bridge.centerUpdated.connect((longitude, latitude) => map.setCenter([longitude, latitude], true));
+        bridge.layerUpdated.connect(setLayer);
+
+        const script = document.createElement('script');
+        script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(bridge.apiKey)}&plugin=AMap.Scale,AMap.ToolBar`;
+        script.onerror = () => showError('高德地图脚本加载失败，请检查网络、Key 和安全密钥');
+        script.onload = () => {
+            try {
+                map = new AMap.Map('map', {center: [110.416819, 25.311724], zoom: 17,
+                    zooms: [15, 19], viewMode: '2D', resizeEnable: true});
+                map.addControl(new AMap.Scale());
+                map.addControl(new AMap.ToolBar({position: 'RB', liteStyle: true}));
+                map.on('error', event => showError(`高德地图加载失败：${event.info || event.message || '未知错误'}`));
+                map.on('complete', () => {
+                    clearTimeout(loadTimeout);
+                    document.getElementById('message').style.display = 'none';
+                    bridge.reportPageReady();
+                });
+                const reportView = () => {
+                    const center = map.getCenter();
+                    bridge.reportViewChanged(center.lng, center.lat, map.getZoom());
+                };
+                map.on('moveend', reportView);
+                map.on('zoomend', reportView);
+            } catch (error) {
+                showError(`高德地图初始化失败：${error.message || error}`);
+            }
+        };
+        loadTimeout = setTimeout(() => showError('高德地图加载超时，请检查网络、Key 和安全密钥'), 15000);
+        document.head.appendChild(script);
+    });
+})();
+</script>
+</body>
+</html>

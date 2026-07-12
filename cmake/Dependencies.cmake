@@ -8,6 +8,8 @@ set(PROJECT_QT_COMPONENTS
     Core
     Gui
     Network
+    WebChannel
+    WebEngineWidgets
     Widgets
 )
 

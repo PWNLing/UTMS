@@ -9,6 +9,8 @@
 #include "core/Logger.h"
 #include "core/RadarFrameStore.h"
 #include "core/RadarJsonParser.h"
+#include "map/AmapConfig.h"
+#include "map/OnlineMapState.h"
 #include "network/UdpReceiver.h"
 
 namespace {
@@ -36,7 +38,7 @@ QByteArray sequencePayload(std::optional<qint64> sequence, double timestamp) {
 
 quint16 availableUdpPort() {
     QUdpSocket socket;
-    const bool bound = socket.bind(QHostAddress::LocalHost, 0);
+    const bool bound = socket.bind(QHostAddress(QHostAddress::LocalHost), static_cast<quint16>(0));
     if (!bound) {
         const QByteArray message =
             QStringLiteral("Failed to reserve a UDP test port: %1").arg(socket.errorString()).toUtf8();
@@ -73,6 +75,10 @@ private slots:
     void resetsSequenceBeforeAcceptingFrameWithoutSequence();
     void invalidFramesDoNotRefreshReceivingStatus();
     void rotatesRuntimeLogsWithinRetentionLimit();
+    void loadsAmapConfiguration();
+    void rejectsIncompleteAmapConfiguration();
+    void computesIncrementalOnlineMapUpdates();
+    void automaticallyCentersOnRadarOnlyOnce();
 };
 
 void RadarCoreTest::parsesValidJson() {
@@ -441,6 +447,85 @@ void RadarCoreTest::rotatesRuntimeLogsWithinRetentionLimit() {
         found_last_message = found_last_message || file.readAll().contains("rotation-test-19-");
     }
     QVERIFY(found_last_message);
+}
+
+void RadarCoreTest::loadsAmapConfiguration() {
+    QTemporaryDir temporary_directory;
+    QVERIFY(temporary_directory.isValid());
+    const QString config_path = temporary_directory.filePath(QStringLiteral("amap.json"));
+    QFile config_file(config_path);
+    QVERIFY(config_file.open(QIODevice::WriteOnly));
+    QCOMPARE(config_file.write(R"json({"key":"web-key","securityCode":"security-code"})json"), 48);
+    config_file.close();
+
+    const utms::AmapConfigResult result = utms::loadAmapConfig(config_path);
+
+    QVERIFY2(result.config.has_value(), qPrintable(result.error));
+    QCOMPARE(result.config->key, QStringLiteral("web-key"));
+    QCOMPARE(result.config->security_code, QStringLiteral("security-code"));
+}
+
+void RadarCoreTest::rejectsIncompleteAmapConfiguration() {
+    QTemporaryDir temporary_directory;
+    QVERIFY(temporary_directory.isValid());
+    const QString config_path = temporary_directory.filePath(QStringLiteral("amap.json"));
+    QFile config_file(config_path);
+    QVERIFY(config_file.open(QIODevice::WriteOnly));
+    QVERIFY(config_file.write(R"json({"key":""})json") > 0);
+    config_file.close();
+
+    const utms::AmapConfigResult result = utms::loadAmapConfig(config_path);
+
+    QVERIFY(!result.config.has_value());
+    QVERIFY(result.error.contains(QStringLiteral("Key")));
+}
+
+void RadarCoreTest::computesIncrementalOnlineMapUpdates() {
+    utms::OnlineMapState map_state;
+    utms::RadarFrame first_frame;
+    first_frame.tracks = {makeTrack(1), makeTrack(2)};
+
+    const utms::OnlineMapUpdate first_update = map_state.replaceFrame(first_frame);
+
+    QCOMPARE(first_update.upserted_targets.size(), 2);
+    QVERIFY(first_update.removed_track_ids.isEmpty());
+
+    utms::RadarFrame second_frame;
+    utms::TrackData moved_track = makeTrack(2);
+    moved_track.position.longitude = 110.42;
+    moved_track.type = utms::TargetType::kTruck;
+    second_frame.tracks = {moved_track, makeTrack(3)};
+
+    const utms::OnlineMapUpdate second_update = map_state.replaceFrame(second_frame);
+
+    QCOMPARE(second_update.upserted_targets.size(), 2);
+    QCOMPARE(second_update.removed_track_ids, QVector<qint64>{1});
+    QCOMPARE(second_update.upserted_targets.constFirst().track_id, 2);
+    QCOMPARE(second_update.upserted_targets.constFirst().color, QStringLiteral("#e67e22"));
+    QCOMPARE(map_state.currentFrame().tracks.size(), 2);
+}
+
+void RadarCoreTest::automaticallyCentersOnRadarOnlyOnce() {
+    utms::OnlineMapState map_state;
+    QCOMPARE(map_state.center().longitude, 110.416819);
+    QCOMPARE(map_state.center().latitude, 25.311724);
+    QCOMPARE(map_state.zoom(), 17);
+
+    utms::RadarFrame first_frame;
+    first_frame.ego_position = utms::GeoPosition{25.31, 110.41};
+    const utms::OnlineMapUpdate first_update = map_state.replaceFrame(first_frame);
+    QVERIFY(first_update.automatic_center.has_value());
+    QCOMPARE(first_update.automatic_center.value().longitude, 110.41);
+
+    utms::RadarFrame second_frame;
+    second_frame.ego_position = utms::GeoPosition{25.32, 110.42};
+    const utms::OnlineMapUpdate second_update = map_state.replaceFrame(second_frame);
+    QVERIFY(!second_update.automatic_center.has_value());
+    QCOMPARE(map_state.radarPosition().value().longitude, 110.42);
+
+    QVERIFY(map_state.locateRadar());
+    QCOMPARE(map_state.center().longitude, 110.42);
+    QCOMPARE(map_state.center().latitude, 25.32);
 }
 
 QTEST_MAIN(RadarCoreTest)

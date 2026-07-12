@@ -3,6 +3,7 @@
 # =========================================================
 # 核心业务模块不依赖界面；通信模块依赖核心模块；UI 位于最上层。
 add_subdirectory(core)
+add_subdirectory(map)
 add_subdirectory(network)
 add_subdirectory(ui)
 
