@@ -1,11 +1,49 @@
 #include "ui/mainwindow.h"
 
-#include <QApplication>
+#include <cstdlib>
+#include <exception>
 
-int main(int argc, char *argv[])
-{
+#include <QApplication>
+#include <QDir>
+
+#include "core/Logger.h"
+
+namespace {
+
+[[noreturn]] void logUnhandledException() {
+    try {
+        const std::exception_ptr exception = std::current_exception();
+        if (exception != nullptr) {
+            std::rethrow_exception(exception);
+        }
+        qCritical() << "Application: terminated by an unknown fatal error";
+    } catch (const std::exception &exception) {
+        qCritical() << "Application: unhandled exception:" << exception.what();
+    } catch (...) {
+        qCritical() << "Application: unhandled non-standard exception";
+    }
+    std::abort();
+}
+
+} // namespace
+
+int main(int argc, char *argv[]) {
     QApplication a(argc, argv);
-    MainWindow w;
-    w.show();
-    return a.exec();
+    const QString log_directory = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("logs"));
+    if (!utms::Logger::install(log_directory)) {
+        qWarning() << "Application: failed to initialize runtime log directory" << log_directory;
+    }
+    std::set_terminate(logUnhandledException);
+    qInfo() << "Application: started";
+
+    int exit_code = 0;
+    {
+        MainWindow w;
+        w.show();
+        exit_code = a.exec();
+    }
+
+    qInfo() << "Application: stopped with exit code" << exit_code;
+    utms::Logger::shutdown();
+    return exit_code;
 }

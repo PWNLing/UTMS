@@ -1,6 +1,8 @@
 set(PROJECT_CORE_TARGET "${PROJECT_NAME}_core")
 
 add_library(${PROJECT_CORE_TARGET} STATIC
+    Logger.cpp
+    Logger.h
     RadarFrameStore.cpp
     RadarFrameStore.h
     RadarJsonParser.cpp

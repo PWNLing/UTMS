@@ -27,3 +27,9 @@ Options can override the destination, target count/range, and frequency:
 ```powershell
 python scripts/udp_simulator.py --host 127.0.0.1 --port 10000 --targets 12-18 --fps 11
 ```
+
+## Runtime Logs
+
+Runtime logs are written to `logs/utms.log` beside the executable. They include application lifecycle,
+UDP binding, payload validation, sequence rejection or jumps, and sequence-baseline resets. Normal accepted
+frames are not logged individually. A log rotates at 10 MB, and at most five current/archive files are kept.

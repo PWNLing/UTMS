@@ -1,16 +1,19 @@
 #include <algorithm>
 
-#include <QtTest>
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QUdpSocket>
+#include <QtTest>
 
+#include "core/Logger.h"
 #include "core/RadarFrameStore.h"
 #include "core/RadarJsonParser.h"
 #include "network/UdpReceiver.h"
 
 namespace {
 
-utms::TrackData makeTrack(qint64 track_id)
-{
+utms::TrackData makeTrack(qint64 track_id) {
     utms::TrackData track;
     track.track_id = track_id;
     track.type = utms::TargetType::kCar;
@@ -18,53 +21,61 @@ utms::TrackData makeTrack(qint64 track_id)
     return track;
 }
 
-const utms::TrackData &findTrack(const utms::RadarFrame &frame, qint64 track_id)
-{
+const utms::TrackData &findTrack(const utms::RadarFrame &frame, qint64 track_id) {
     const auto iterator = std::find_if(frame.tracks.cbegin(), frame.tracks.cend(),
-                                       [track_id](const utms::TrackData &track) {
-                                           return track.track_id == track_id;
-                                       });
+                                       [track_id](const utms::TrackData &track) { return track.track_id == track_id; });
     Q_ASSERT(iterator != frame.tracks.cend());
     return *iterator;
 }
 
-QByteArray sequencePayload(std::optional<qint64> sequence, double timestamp)
-{
-    const QString header = sequence.has_value()
-                               ? QStringLiteral(R"json("header":{"sequence":%1},)json").arg(sequence.value())
-                               : QString();
-    return QStringLiteral(R"json({%1"timestamp":%2,"tracks":[]})json")
-        .arg(header)
-        .arg(timestamp, 0, 'f', 3)
-        .toUtf8();
+QByteArray sequencePayload(std::optional<qint64> sequence, double timestamp) {
+    const QString header =
+        sequence.has_value() ? QStringLiteral(R"json("header":{"sequence":%1},)json").arg(sequence.value()) : QString();
+    return QStringLiteral(R"json({%1"timestamp":%2,"tracks":[]})json").arg(header).arg(timestamp, 0, 'f', 3).toUtf8();
 }
 
-quint16 availableUdpPort()
-{
+quint16 availableUdpPort() {
     QUdpSocket socket;
     const bool bound = socket.bind(QHostAddress::LocalHost, 0);
-    Q_ASSERT(bound);
+    if (!bound) {
+        const QByteArray message =
+            QStringLiteral("Failed to reserve a UDP test port: %1").arg(socket.errorString()).toUtf8();
+        QTest::qFail(message.constData(), __FILE__, __LINE__);
+        return 0;
+    }
     return socket.localPort();
 }
 
-}  // namespace
+} // namespace
 
-class RadarCoreTest : public QObject
-{
+class RadarCoreTest : public QObject {
     Q_OBJECT
 
 private slots:
     void parsesValidJson();
+    void rejectsInvalidFrameStructures_data();
+    void rejectsInvalidFrameStructures();
+    void filtersInvalidTargetsAndReportsValidationWarnings();
+    void validatesCoordinateBoundaries_data();
+    void validatesCoordinateBoundaries();
+    void preservesMissingOptionalMeasurementsWithoutWarnings();
+    void overwritesDuplicateTracksAndReportsCountMismatch();
+    void normalizesTargetTypes_data();
+    void normalizesTargetTypes();
     void replacesCurrentFrameAndPreservesFirstSeen();
     void removesDisappearedTargets();
     void resetsFirstSeenAfterTargetDisappears();
+    void rejectsDuplicateAndOutOfOrderSequences();
+    void acceptsAndReportsSequenceJump();
+    void resetsSequenceWhenListeningRestarts();
     void acceptsFrameAfterSenderRestart();
     void rejectsSmallOutOfOrderDropWithNewerTimestamp();
     void resetsSequenceBeforeAcceptingFrameWithoutSequence();
+    void invalidFramesDoNotRefreshReceivingStatus();
+    void rotatesRuntimeLogsWithinRetentionLimit();
 };
 
-void RadarCoreTest::parsesValidJson()
-{
+void RadarCoreTest::parsesValidJson() {
     const QByteArray payload = R"json({
         "timestamp": 1773824375.675,
         "header": {"sequence": 14760},
@@ -103,8 +114,136 @@ void RadarCoreTest::parsesValidJson()
     QVERIFY(!result.frame->tracks.at(1).distance_m.has_value());
 }
 
-void RadarCoreTest::replacesCurrentFrameAndPreservesFirstSeen()
-{
+void RadarCoreTest::rejectsInvalidFrameStructures_data() {
+    QTest::addColumn<QByteArray>("payload");
+
+    QTest::newRow("invalid-json") << QByteArray("{");
+    QTest::newRow("array-root") << QByteArray("[]");
+    QTest::newRow("missing-tracks") << QByteArray(R"json({"target_count":0})json");
+    QTest::newRow("tracks-not-array") << QByteArray(R"json({"tracks":{}})json");
+}
+
+void RadarCoreTest::rejectsInvalidFrameStructures() {
+    QFETCH(QByteArray, payload);
+
+    const utms::RadarParseResult result = utms::RadarJsonParser::parse(payload);
+
+    QVERIFY(!result.frame.has_value());
+    QVERIFY(!result.error.isEmpty());
+}
+
+void RadarCoreTest::filtersInvalidTargetsAndReportsValidationWarnings() {
+    const QByteArray payload = R"json({
+        "ego_position":{"latitude":0,"longitude":0},
+        "tracks":[
+            {"type":"CAR","position":{"latitude":25.3,"longitude":110.4}},
+            {"track_id":2,"position":{"latitude":91,"longitude":110.4}},
+            {"track_id":3,"position":{"latitude":0,"longitude":0}},
+            {"track_id":4,"position":{"latitude":25.3,"longitude":110.4},
+             "velocity":"fast","distance":-1}
+        ]
+    })json";
+
+    const utms::RadarParseResult result = utms::RadarJsonParser::parse(payload);
+
+    QVERIFY2(result.frame.has_value(), qPrintable(result.error));
+    QVERIFY(!result.frame->ego_position.has_value());
+    QCOMPARE(result.frame->tracks.size(), 1);
+    QCOMPARE(result.frame->tracks.constFirst().track_id, 4);
+    QVERIFY(!result.frame->tracks.constFirst().velocity_mps.has_value());
+    QVERIFY(!result.frame->tracks.constFirst().distance_m.has_value());
+    QVERIFY(result.warnings.size() >= 6);
+}
+
+void RadarCoreTest::validatesCoordinateBoundaries_data() {
+    QTest::addColumn<QString>("latitude");
+    QTest::addColumn<QString>("longitude");
+    QTest::addColumn<bool>("expected_valid");
+
+    QTest::newRow("latitude-below-minimum") << QStringLiteral("-90.1") << QStringLiteral("110") << false;
+    QTest::newRow("longitude-below-minimum") << QStringLiteral("25") << QStringLiteral("-180.1") << false;
+    QTest::newRow("longitude-above-maximum") << QStringLiteral("25") << QStringLiteral("180.1") << false;
+    QTest::newRow("non-finite-latitude") << QStringLiteral("\"1e309\"") << QStringLiteral("110") << false;
+    QTest::newRow("lower-boundaries") << QStringLiteral("-90") << QStringLiteral("-180") << true;
+    QTest::newRow("upper-boundaries") << QStringLiteral("90") << QStringLiteral("180") << true;
+}
+
+void RadarCoreTest::validatesCoordinateBoundaries() {
+    QFETCH(QString, latitude);
+    QFETCH(QString, longitude);
+    QFETCH(bool, expected_valid);
+    const QByteArray payload =
+        QStringLiteral(R"json({"tracks":[{"track_id":1,"position":{"latitude":%1,"longitude":%2}}]})json")
+            .arg(latitude, longitude)
+            .toUtf8();
+
+    const utms::RadarParseResult result = utms::RadarJsonParser::parse(payload);
+
+    QVERIFY2(result.frame.has_value(), qPrintable(result.error));
+    QCOMPARE(!result.frame->tracks.isEmpty(), expected_valid);
+}
+
+void RadarCoreTest::preservesMissingOptionalMeasurementsWithoutWarnings() {
+    const QByteArray payload = R"json({
+        "tracks":[
+            {"track_id":9,"position":{"latitude":25.3,"longitude":110.4}}
+        ]
+    })json";
+
+    const utms::RadarParseResult result = utms::RadarJsonParser::parse(payload);
+
+    QVERIFY2(result.frame.has_value(), qPrintable(result.error));
+    QCOMPARE(result.frame->tracks.size(), 1);
+    QVERIFY(!result.frame->tracks.constFirst().velocity_mps.has_value());
+    QVERIFY(!result.frame->tracks.constFirst().distance_m.has_value());
+    QVERIFY(result.warnings.isEmpty());
+}
+
+void RadarCoreTest::overwritesDuplicateTracksAndReportsCountMismatch() {
+    const QByteArray payload = R"json({
+        "target_count":1,
+        "tracks":[
+            {"track_id":7,"type":"CAR","position":{"latitude":25.3,"longitude":110.4}},
+            {"track_id":7,"type":"TRUCK","position":{"latitude":25.4,"longitude":110.5}}
+        ]
+    })json";
+
+    const utms::RadarParseResult result = utms::RadarJsonParser::parse(payload);
+
+    QVERIFY2(result.frame.has_value(), qPrintable(result.error));
+    QCOMPARE(result.frame->tracks.size(), 1);
+    QCOMPARE(result.frame->tracks.constFirst().type, utms::TargetType::kTruck);
+    QCOMPARE(result.frame->tracks.constFirst().position.latitude, 25.4);
+    QCOMPARE(result.warnings.size(), 2);
+}
+
+void RadarCoreTest::normalizesTargetTypes_data() {
+    QTest::addColumn<QString>("protocol_type");
+    QTest::addColumn<utms::TargetType>("expected_type");
+
+    QTest::newRow("car") << QStringLiteral(" car ") << utms::TargetType::kCar;
+    QTest::newRow("truck") << QStringLiteral("Truck") << utms::TargetType::kTruck;
+    QTest::newRow("pedestrian") << QStringLiteral("PEDESTRIAN") << utms::TargetType::kPedestrian;
+    QTest::newRow("bicycle") << QStringLiteral(" bicycle ") << utms::TargetType::kBicycle;
+    QTest::newRow("unknown") << QStringLiteral("BUS") << utms::TargetType::kUnknown;
+}
+
+void RadarCoreTest::normalizesTargetTypes() {
+    QFETCH(QString, protocol_type);
+    QFETCH(utms::TargetType, expected_type);
+    const QByteArray payload =
+        QStringLiteral(
+            R"json({"tracks":[{"track_id":1,"type":"%1","position":{"latitude":25.3,"longitude":110.4}}]})json")
+            .arg(protocol_type)
+            .toUtf8();
+
+    const utms::RadarParseResult result = utms::RadarJsonParser::parse(payload);
+
+    QVERIFY2(result.frame.has_value(), qPrintable(result.error));
+    QCOMPARE(result.frame->tracks.constFirst().type, expected_type);
+}
+
+void RadarCoreTest::replacesCurrentFrameAndPreservesFirstSeen() {
     utms::RadarFrameStore store;
     const QDateTime first_time = QDateTime::fromMSecsSinceEpoch(1'000);
     const QDateTime second_time = QDateTime::fromMSecsSinceEpoch(2'000);
@@ -124,8 +263,7 @@ void RadarCoreTest::replacesCurrentFrameAndPreservesFirstSeen()
     QCOMPARE(findTrack(current_frame, 3).first_seen_at, second_time);
 }
 
-void RadarCoreTest::removesDisappearedTargets()
-{
+void RadarCoreTest::removesDisappearedTargets() {
     utms::RadarFrameStore store;
     utms::RadarFrame first_frame;
     first_frame.received_at = QDateTime::fromMSecsSinceEpoch(1'000);
@@ -141,8 +279,7 @@ void RadarCoreTest::removesDisappearedTargets()
     QCOMPARE(current_frame.tracks.constFirst().track_id, 2);
 }
 
-void RadarCoreTest::resetsFirstSeenAfterTargetDisappears()
-{
+void RadarCoreTest::resetsFirstSeenAfterTargetDisappears() {
     utms::RadarFrameStore store;
     utms::RadarFrame frame;
     frame.received_at = QDateTime::fromMSecsSinceEpoch(1'000);
@@ -160,8 +297,57 @@ void RadarCoreTest::resetsFirstSeenAfterTargetDisappears()
     QCOMPARE(current_frame.tracks.constFirst().first_seen_at, frame.received_at);
 }
 
-void RadarCoreTest::acceptsFrameAfterSenderRestart()
-{
+void RadarCoreTest::rejectsDuplicateAndOutOfOrderSequences() {
+    utms::UdpReceiver receiver;
+    QSignalSpy frame_spy(&receiver, &utms::UdpReceiver::frameReceived);
+    QUdpSocket sender;
+    const quint16 port = availableUdpPort();
+    receiver.startListening(port);
+
+    QVERIFY(sender.writeDatagram(sequencePayload(10, 1'000.0), QHostAddress::LocalHost, port) > 0);
+    QTRY_COMPARE_WITH_TIMEOUT(frame_spy.count(), 1, 1'000);
+    QVERIFY(sender.writeDatagram(sequencePayload(10, 1'000.1), QHostAddress::LocalHost, port) > 0);
+    QVERIFY(sender.writeDatagram(sequencePayload(9, 1'000.2), QHostAddress::LocalHost, port) > 0);
+    QTest::qWait(100);
+    QCOMPARE(frame_spy.count(), 1);
+
+    receiver.stopListening();
+}
+
+void RadarCoreTest::acceptsAndReportsSequenceJump() {
+    utms::UdpReceiver receiver;
+    QSignalSpy frame_spy(&receiver, &utms::UdpReceiver::frameReceived);
+    QUdpSocket sender;
+    const quint16 port = availableUdpPort();
+    receiver.startListening(port);
+
+    QVERIFY(sender.writeDatagram(sequencePayload(10, 1'000.0), QHostAddress::LocalHost, port) > 0);
+    QTRY_COMPARE_WITH_TIMEOUT(frame_spy.count(), 1, 1'000);
+    QTest::ignoreMessage(QtWarningMsg, "UdpReceiver: sequence jump from 10 to 13");
+    QVERIFY(sender.writeDatagram(sequencePayload(13, 1'000.1), QHostAddress::LocalHost, port) > 0);
+    QTRY_COMPARE_WITH_TIMEOUT(frame_spy.count(), 2, 1'000);
+
+    receiver.stopListening();
+}
+
+void RadarCoreTest::resetsSequenceWhenListeningRestarts() {
+    utms::UdpReceiver receiver;
+    QSignalSpy frame_spy(&receiver, &utms::UdpReceiver::frameReceived);
+    QUdpSocket sender;
+    const quint16 port = availableUdpPort();
+    receiver.startListening(port);
+
+    QVERIFY(sender.writeDatagram(sequencePayload(500, 1'000.0), QHostAddress::LocalHost, port) > 0);
+    QTRY_COMPARE_WITH_TIMEOUT(frame_spy.count(), 1, 1'000);
+    receiver.stopListening();
+    receiver.startListening(port);
+    QVERIFY(sender.writeDatagram(sequencePayload(1, 1'000.1), QHostAddress::LocalHost, port) > 0);
+    QTRY_COMPARE_WITH_TIMEOUT(frame_spy.count(), 2, 1'000);
+
+    receiver.stopListening();
+}
+
+void RadarCoreTest::acceptsFrameAfterSenderRestart() {
     utms::UdpReceiver receiver;
     QSignalSpy frame_spy(&receiver, &utms::UdpReceiver::frameReceived);
     QUdpSocket sender;
@@ -176,8 +362,7 @@ void RadarCoreTest::acceptsFrameAfterSenderRestart()
     receiver.stopListening();
 }
 
-void RadarCoreTest::rejectsSmallOutOfOrderDropWithNewerTimestamp()
-{
+void RadarCoreTest::rejectsSmallOutOfOrderDropWithNewerTimestamp() {
     utms::UdpReceiver receiver;
     QSignalSpy frame_spy(&receiver, &utms::UdpReceiver::frameReceived);
     QUdpSocket sender;
@@ -193,8 +378,7 @@ void RadarCoreTest::rejectsSmallOutOfOrderDropWithNewerTimestamp()
     receiver.stopListening();
 }
 
-void RadarCoreTest::resetsSequenceBeforeAcceptingFrameWithoutSequence()
-{
+void RadarCoreTest::resetsSequenceBeforeAcceptingFrameWithoutSequence() {
     utms::UdpReceiver receiver;
     QSignalSpy frame_spy(&receiver, &utms::UdpReceiver::frameReceived);
     QUdpSocket sender;
@@ -204,13 +388,59 @@ void RadarCoreTest::resetsSequenceBeforeAcceptingFrameWithoutSequence()
     QCOMPARE(sender.writeDatagram(sequencePayload(500, 1'000.0), QHostAddress::LocalHost, port) > 0, true);
     QTRY_COMPARE_WITH_TIMEOUT(frame_spy.count(), 1, 1'000);
     QTest::qWait(3'100);
-    QCOMPARE(sender.writeDatagram(sequencePayload(std::nullopt, 1'004.0), QHostAddress::LocalHost, port) > 0,
-             true);
+    QCOMPARE(sender.writeDatagram(sequencePayload(std::nullopt, 1'004.0), QHostAddress::LocalHost, port) > 0, true);
     QTRY_COMPARE_WITH_TIMEOUT(frame_spy.count(), 2, 1'000);
     QCOMPARE(sender.writeDatagram(sequencePayload(1, 1'004.1), QHostAddress::LocalHost, port) > 0, true);
     QTRY_COMPARE_WITH_TIMEOUT(frame_spy.count(), 3, 1'000);
 
     receiver.stopListening();
+}
+
+void RadarCoreTest::invalidFramesDoNotRefreshReceivingStatus() {
+    utms::UdpReceiver receiver;
+    QSignalSpy status_spy(&receiver, &utms::UdpReceiver::statusChanged);
+    QUdpSocket sender;
+    const quint16 port = availableUdpPort();
+    receiver.startListening(port);
+
+    QVERIFY(sender.writeDatagram(sequencePayload(1, 1'000.0), QHostAddress::LocalHost, port) > 0);
+    QTRY_COMPARE_WITH_TIMEOUT(status_spy.constLast().at(0).value<utms::UdpStatus>(), utms::UdpStatus::kReceiving,
+                              1'000);
+    QTest::qWait(2'500);
+    QVERIFY(sender.writeDatagram(QByteArray("{"), QHostAddress::LocalHost, port) > 0);
+    QTRY_VERIFY_WITH_TIMEOUT(status_spy.count() >= 3, 1'000);
+    QTRY_COMPARE_WITH_TIMEOUT(status_spy.constLast().at(0).value<utms::UdpStatus>(), utms::UdpStatus::kListeningNoData,
+                              1'000);
+
+    receiver.stopListening();
+}
+
+void RadarCoreTest::rotatesRuntimeLogsWithinRetentionLimit() {
+    QTemporaryDir temporary_directory;
+    QVERIFY(temporary_directory.isValid());
+    QVERIFY(utms::Logger::install(temporary_directory.path(), 300, 3));
+
+    qWarning().noquote() << QStringLiteral("oversized-message-%1").arg(QString(1'000, QChar('y')));
+    for (int index = 0; index < 20; ++index) {
+        qWarning().noquote() << QStringLiteral("rotation-test-%1-%2").arg(index).arg(QString(80, QChar('x')));
+    }
+    const QString current_log_path = utms::Logger::logFilePath();
+    utms::Logger::shutdown();
+
+    const QStringList log_files =
+        QDir(temporary_directory.path()).entryList({QStringLiteral("utms*.log")}, QDir::Files, QDir::Name);
+    QVERIFY(!current_log_path.isEmpty());
+    QVERIFY(QFileInfo::exists(current_log_path));
+    QCOMPARE(log_files.size(), 3);
+
+    bool found_last_message = false;
+    for (const QString &file_name : log_files) {
+        QFile file(QDir(temporary_directory.path()).filePath(file_name));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(file.size() <= 300);
+        found_last_message = found_last_message || file.readAll().contains("rotation-test-19-");
+    }
+    QVERIFY(found_last_message);
 }
 
 QTEST_MAIN(RadarCoreTest)
