@@ -59,6 +59,8 @@ qrc_*.cpp
 *.swo
 core
 core.*
+!src/core/
+!src/core/**
 
 # =========================
 # 其他 IDE

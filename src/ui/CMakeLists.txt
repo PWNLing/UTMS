@@ -40,6 +40,7 @@ target_include_directories(${PROJECT_UI_TARGET}
 # 需要继续传播给使用该模块的目标。
 target_link_libraries(${PROJECT_UI_TARGET}
     PUBLIC
+        ${PROJECT_NAMESPACE}::network
         Qt${QT_VERSION_MAJOR}::Widgets
 )
 
