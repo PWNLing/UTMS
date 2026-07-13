@@ -38,4 +38,57 @@ QString targetTypeColorName(TargetType type)
     return QStringLiteral("#95a5a6");
 }
 
-}  // namespace utms
+int TargetStatistics::count(TargetType type) const
+{
+    switch (type) {
+    case TargetType::kCar:
+        return car_count;
+    case TargetType::kTruck:
+        return truck_count;
+    case TargetType::kPedestrian:
+        return pedestrian_count;
+    case TargetType::kBicycle:
+        return bicycle_count;
+    case TargetType::kUnknown:
+        return unknown_count;
+    }
+
+    return unknown_count;
+}
+
+int TargetStatistics::totalCount() const
+{
+    return car_count + truck_count + pedestrian_count + bicycle_count + unknown_count;
+}
+
+int TargetStatistics::vehicleGroupCount() const
+{
+    return car_count + truck_count + bicycle_count;
+}
+
+TargetStatistics calculateTargetStatistics(const QVector<TrackData> &tracks)
+{
+    TargetStatistics statistics;
+    for (const TrackData &track : tracks) {
+        switch (track.type) {
+        case TargetType::kCar:
+            ++statistics.car_count;
+            break;
+        case TargetType::kTruck:
+            ++statistics.truck_count;
+            break;
+        case TargetType::kPedestrian:
+            ++statistics.pedestrian_count;
+            break;
+        case TargetType::kBicycle:
+            ++statistics.bicycle_count;
+            break;
+        case TargetType::kUnknown:
+            ++statistics.unknown_count;
+            break;
+        }
+    }
+    return statistics;
+}
+
+} // namespace utms

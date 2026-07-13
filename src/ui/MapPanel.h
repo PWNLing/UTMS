@@ -23,12 +23,13 @@ class MapPanel : public QWidget
 {
     Q_OBJECT
 
-    public:
+public:
     explicit MapPanel(QWidget *parent = nullptr);
 
     void setFrame(const RadarFrame &frame);
     void setMapMode(MapMode mode);
     void setOnlineLayer(OnlineMapLayer layer);
+    void setCenter(const GeoPosition &center);
     bool setSelectedTrackId(std::optional<qint64> track_id);
     bool selectTarget(qint64 track_id, bool center_on_target);
     bool locateRadar();
@@ -38,10 +39,10 @@ class MapPanel : public QWidget
     int zoom() const;
     std::optional<qint64> selectedTrackId() const;
 
-    signals:
+signals:
     void targetClicked(qint64 track_id);
 
-    private:
+private:
     void handleTargetClicked(qint64 track_id);
     void handleOnlineViewChanged(const GeoPosition &center, int zoom);
     void handleOfflineViewChanged(const GeoPosition &center, int zoom);

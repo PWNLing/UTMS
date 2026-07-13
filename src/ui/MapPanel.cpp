@@ -64,6 +64,12 @@ void MapPanel::setOnlineLayer(OnlineMapLayer layer)
     online_map_->setLayer(layer);
 }
 
+void MapPanel::setCenter(const GeoPosition &center)
+{
+    state_.setCenter(center);
+    applyViewToActiveMap();
+}
+
 bool MapPanel::setSelectedTrackId(std::optional<qint64> track_id)
 {
     if (!state_.setSelectedTrackId(track_id))

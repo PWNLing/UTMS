@@ -29,6 +29,8 @@ RadarFrame RadarFrameStore::replace(const RadarFrame &frame)
         }
     }
 
+    next_frame.statistics = calculateTargetStatistics(next_frame.tracks);
+
     return next_frame;
 }
 
@@ -37,4 +39,4 @@ void RadarFrameStore::clear()
     first_seen_by_track_id_.clear();
 }
 
-}  // namespace utms
+} // namespace utms

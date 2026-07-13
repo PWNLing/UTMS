@@ -68,6 +68,8 @@ private slots:
     void replacesCurrentFrameAndPreservesFirstSeen();
     void removesDisappearedTargets();
     void resetsFirstSeenAfterTargetDisappears();
+    void calculatesCurrentFrameTargetStatistics();
+    void groupsBicyclesWithVehiclesForPieStatistics();
     void rejectsDuplicateAndOutOfOrderSequences();
     void acceptsAndReportsSequenceJump();
     void resetsSequenceWhenListeningRestarts();
@@ -305,6 +307,41 @@ void RadarCoreTest::resetsFirstSeenAfterTargetDisappears() {
     const utms::RadarFrame current_frame = store.replace(frame);
 
     QCOMPARE(current_frame.tracks.constFirst().first_seen_at, frame.received_at);
+}
+
+void RadarCoreTest::calculatesCurrentFrameTargetStatistics() {
+    utms::RadarFrameStore store;
+    utms::RadarFrame frame;
+    frame.tracks = {makeTrack(1), makeTrack(2), makeTrack(3), makeTrack(4), makeTrack(5), makeTrack(6)};
+    frame.tracks[1].type = utms::TargetType::kTruck;
+    frame.tracks[2].type = utms::TargetType::kPedestrian;
+    frame.tracks[3].type = utms::TargetType::kBicycle;
+    frame.tracks[4].type = utms::TargetType::kUnknown;
+
+    const utms::RadarFrame current_frame = store.replace(frame);
+
+    QCOMPARE(current_frame.statistics.car_count, 2);
+    QCOMPARE(current_frame.statistics.truck_count, 1);
+    QCOMPARE(current_frame.statistics.pedestrian_count, 1);
+    QCOMPARE(current_frame.statistics.bicycle_count, 1);
+    QCOMPARE(current_frame.statistics.unknown_count, 1);
+    QCOMPARE(current_frame.statistics.totalCount(), 6);
+}
+
+void RadarCoreTest::groupsBicyclesWithVehiclesForPieStatistics() {
+    utms::RadarFrameStore store;
+    utms::RadarFrame frame;
+    frame.tracks = {makeTrack(1), makeTrack(2), makeTrack(3), makeTrack(4), makeTrack(5)};
+    frame.tracks[1].type = utms::TargetType::kTruck;
+    frame.tracks[2].type = utms::TargetType::kBicycle;
+    frame.tracks[3].type = utms::TargetType::kPedestrian;
+    frame.tracks[4].type = utms::TargetType::kUnknown;
+
+    const utms::RadarFrame current_frame = store.replace(frame);
+
+    QCOMPARE(current_frame.statistics.vehicleGroupCount(), 3);
+    QCOMPARE(current_frame.statistics.pedestrian_count, 1);
+    QCOMPARE(current_frame.statistics.unknown_count, 1);
 }
 
 void RadarCoreTest::rejectsDuplicateAndOutOfOrderSequences() {
