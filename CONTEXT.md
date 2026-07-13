@@ -11,8 +11,26 @@ The current product phase focused on radar display control, UDP JSON intake, onl
 _Avoid_: Video phase, full system, installer release
 
 **Second-stage video capabilities**:
-Future capabilities around RTSP video, FFmpeg, YOLO, ONNX Runtime, video decoding, and radar-video association. They are outside the first-stage MVP.
-_Avoid_: First-stage video, placeholder implementation
+The planned second-stage scope for one RTSP video stream, FFmpeg decoding, YOLO ONNX Runtime detection, and video presentation. Radar-video association is not part of this stage.
+_Avoid_: First-stage video, radar-video association
+
+### Video Data
+
+**Video detection**:
+A YOLO result from a decoded video frame, shown as a bounding box with a category and confidence. It is not a radar target, has no track ID, and is not included in radar tables or statistics.
+_Avoid_: Target, radar target, track
+
+**Video detection category**:
+The displayed category of a video detection. `person`, `bicycle`, `car`, and `truck` are shown as 行人、自行车、汽车、卡车; every other YOLO class is shown as 未知.
+_Avoid_: Radar target type, full COCO category
+
+**Video decoder**:
+The worker-side boundary that maintains the RTSP connection and turns the stream into video frames. It is separate from UI rendering and detection inference.
+_Avoid_: Video widget, inference worker
+
+**Video inference worker**:
+The worker-side boundary that turns the latest decoded frame into video detections using the configured YOLO model. It is separate from RTSP decoding and UI rendering.
+_Avoid_: Video decoder, UI detector
 
 ### Radar Data
 

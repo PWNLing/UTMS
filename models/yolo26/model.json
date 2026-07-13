@@ -1,0 +1,14 @@
+{
+    "model_family": "yolo26",
+    "task": "detect",
+    "model_file": "yolo26n.onnx",
+    "classes_file": "classes.txt",
+    "input_width": 640,
+    "input_height": 640,
+    "confidence_threshold": 0.25,
+    "nms_threshold": 0.45,
+    "letterbox": true,
+    "swap_rb": true,
+    "normalize": true,
+    "normalize_scale": 0.00392156862745098
+}
