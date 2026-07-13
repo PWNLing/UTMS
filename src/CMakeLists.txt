@@ -5,6 +5,7 @@
 add_subdirectory(core)
 add_subdirectory(map)
 add_subdirectory(network)
+add_subdirectory(workbench)
 add_subdirectory(ui)
 
 # =========================================================

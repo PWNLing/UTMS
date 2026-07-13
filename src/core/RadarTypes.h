@@ -18,6 +18,7 @@ enum class TargetType {
 };
 
 QString targetTypeDisplayName(TargetType type);
+QString targetTypeColorName(TargetType type);
 
 struct GeoPosition {
     double latitude = 0.0;

@@ -20,4 +20,22 @@ QString targetTypeDisplayName(TargetType type)
     return QStringLiteral("未知");
 }
 
+QString targetTypeColorName(TargetType type)
+{
+    switch (type) {
+    case TargetType::kCar:
+        return QStringLiteral("#3498db");
+    case TargetType::kTruck:
+        return QStringLiteral("#e67e22");
+    case TargetType::kPedestrian:
+        return QStringLiteral("#2ecc71");
+    case TargetType::kBicycle:
+        return QStringLiteral("#9b59b6");
+    case TargetType::kUnknown:
+        return QStringLiteral("#95a5a6");
+    }
+
+    return QStringLiteral("#95a5a6");
+}
+
 }  // namespace utms

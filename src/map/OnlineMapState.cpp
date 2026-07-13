@@ -5,28 +5,6 @@
 
 namespace utms
 {
-namespace
-{
-
-QString targetColor(TargetType type)
-{
-    switch (type)
-    {
-    case TargetType::kCar:
-        return QStringLiteral("#3498db");
-    case TargetType::kTruck:
-        return QStringLiteral("#e67e22");
-    case TargetType::kPedestrian:
-        return QStringLiteral("#2ecc71");
-    case TargetType::kBicycle:
-        return QStringLiteral("#9b59b6");
-    case TargetType::kUnknown:
-        return QStringLiteral("#95a5a6");
-    }
-    return QStringLiteral("#95a5a6");
-}
-
-} // namespace
 
 OnlineMapUpdate OnlineMapState::replaceFrame(const RadarFrame &frame)
 {
@@ -159,7 +137,7 @@ bool OnlineMapState::locateRadar()
 OnlineMapTarget OnlineMapState::makeMapTarget(const TrackData &track, bool content_changed)
 {
     return {track.track_id,   track.type,          track.position,          track.velocity_mps,
-            track.distance_m, track.first_seen_at, targetColor(track.type), content_changed};
+            track.distance_m, track.first_seen_at, targetTypeColorName(track.type), content_changed};
 }
 
 bool OnlineMapState::markerDataMatches(const TrackData &left, const TrackData &right)

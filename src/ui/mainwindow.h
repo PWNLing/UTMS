@@ -7,11 +7,11 @@ class QComboBox;
 class QLabel;
 class QPushButton;
 class QSpinBox;
-class QTableWidget;
 class QThread;
 
 namespace utms {
 class MapPanel;
+class TrackTableWidget;
 class UdpReceiver;
 enum class UdpStatus;
 struct RadarFrame;
@@ -46,7 +46,7 @@ private:
     QPushButton *start_button_ = nullptr;
     QPushButton *stop_button_ = nullptr;
     QLabel *status_label_ = nullptr;
-    QTableWidget *track_table_ = nullptr;
+    utms::TrackTableWidget *track_table_ = nullptr;
     utms::MapPanel *map_panel_ = nullptr;
     QComboBox *map_mode_combo_box_ = nullptr;
     QComboBox *map_layer_combo_box_ = nullptr;
