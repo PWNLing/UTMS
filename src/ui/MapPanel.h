@@ -45,7 +45,8 @@ class MapPanel : public QWidget
     void handleTargetClicked(qint64 track_id);
     void handleOnlineViewChanged(const GeoPosition &center, int zoom);
     void handleOfflineViewChanged(const GeoPosition &center, int zoom);
-    void synchronizeViews();
+    void applyViewToActiveMap();
+    void synchronizeActiveMap();
 
     OnlineMapState state_;
     QStackedWidget *map_stack_ = nullptr;

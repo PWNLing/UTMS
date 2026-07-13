@@ -22,6 +22,7 @@ class OnlineMapWidget : public QWidget
     explicit OnlineMapWidget(QWidget *parent = nullptr);
 
     void renderFrame(const OnlineMapState &state, const OnlineMapUpdate &update);
+    void synchronizeState(const OnlineMapState &state);
     void setView(const GeoPosition &center, int zoom);
     void setLayer(OnlineMapLayer layer);
     void setSelectedTrackId(std::optional<qint64> track_id);

@@ -2,19 +2,24 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include <QCoreApplication>
 #include <QDir>
-#include <QFileInfo>
+#include <QFutureWatcher>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QGraphicsSimpleTextItem>
+#include <QImage>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QScrollBar>
+#include <QTimer>
 #include <QWheelEvent>
+#include <QtConcurrentRun>
 
 #include "map/WebMercator.h"
 
@@ -30,17 +35,21 @@ QString optionalMeasurement(const std::optional<double> &measurement)
     return measurement.has_value() ? QString::number(measurement.value(), 'f', 2) : QStringLiteral("--");
 }
 
-QPixmap missingTilePixmap()
+const QPixmap &missingTilePixmap()
 {
-    QPixmap pixmap(WebMercator::kTileSizePx, WebMercator::kTileSizePx);
-    pixmap.fill(QColor(QStringLiteral("#eceff1")));
-    QPainter painter(&pixmap);
-    painter.setPen(QPen(QColor(QStringLiteral("#c5c9cc")), 2));
-    painter.drawRect(pixmap.rect().adjusted(1, 1, -1, -1));
-    painter.drawLine(0, 0, pixmap.width(), pixmap.height());
-    painter.drawLine(pixmap.width(), 0, 0, pixmap.height());
-    painter.setPen(QColor(QStringLiteral("#7f8c8d")));
-    painter.drawText(pixmap.rect(), Qt::AlignCenter, QObject::tr("暂无离线地图"));
+    static const QPixmap pixmap = []()
+    {
+        QPixmap placeholder(WebMercator::kTileSizePx, WebMercator::kTileSizePx);
+        placeholder.fill(QColor(QStringLiteral("#eceff1")));
+        QPainter painter(&placeholder);
+        painter.setPen(QPen(QColor(QStringLiteral("#c5c9cc")), 2));
+        painter.drawRect(placeholder.rect().adjusted(1, 1, -1, -1));
+        painter.drawLine(0, 0, placeholder.width(), placeholder.height());
+        painter.drawLine(placeholder.width(), 0, 0, placeholder.height());
+        painter.setPen(QColor(QStringLiteral("#7f8c8d")));
+        painter.drawText(placeholder.rect(), Qt::AlignCenter, QObject::tr("暂无离线地图"));
+        return placeholder;
+    }();
     return pixmap;
 }
 
@@ -48,6 +57,7 @@ QPixmap missingTilePixmap()
 
 OfflineMapWidget::OfflineMapWidget(QWidget *parent)
     : QGraphicsView(parent), map_scene_(new QGraphicsScene(this)), missing_label_(new QLabel(viewport())),
+      tile_update_timer_(new QTimer(this)), missing_log_timer_(new QTimer(this)),
       tile_root_path_(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("data/map/amap")))
 {
     setScene(map_scene_);
@@ -61,15 +71,42 @@ OfflineMapWidget::OfflineMapWidget(QWidget *parent)
     missing_label_->setStyleSheet(QStringLiteral("QLabel { background: rgba(245,245,245,220); color: "
                                                  "#7f8c8d; padding: 10px; }"));
     missing_label_->hide();
+
+    tile_update_timer_->setSingleShot(true);
+    tile_update_timer_->setInterval(16);
+    connect(tile_update_timer_, &QTimer::timeout, this, &OfflineMapWidget::updateTiles);
+    const auto schedule_tile_update = [this]()
+    {
+        if (!applying_view_ && !tile_update_timer_->isActive())
+        {
+            tile_update_timer_->start();
+        }
+    };
+    connect(horizontalScrollBar(), &QScrollBar::valueChanged, this,
+            [schedule_tile_update](int) { schedule_tile_update(); });
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this,
+            [schedule_tile_update](int) { schedule_tile_update(); });
+
+    missing_log_timer_->setSingleShot(true);
+    missing_log_timer_->setInterval(100);
+    connect(missing_log_timer_, &QTimer::timeout, this,
+            [this]()
+            {
+                if (pending_missing_tile_count_ > 0)
+                {
+                    qWarning() << "OfflineMapWidget:" << pending_missing_tile_count_
+                               << "offline tiles missing; first path:" << first_pending_missing_tile_path_;
+                }
+                pending_missing_tile_count_ = 0;
+                first_pending_missing_tile_path_.clear();
+            });
     setView(center_, zoom_);
 }
 
 void OfflineMapWidget::renderState(const OnlineMapState &state)
 {
     render_state_ = state;
-    center_ = state.center();
-    zoom_ = state.zoom();
-    setView(center_, zoom_);
+    updateMarkers();
 }
 
 void OfflineMapWidget::setView(const GeoPosition &center, int zoom)
@@ -78,7 +115,9 @@ void OfflineMapWidget::setView(const GeoPosition &center, int zoom)
     zoom_ = std::clamp(zoom, 15, 19);
     const qreal world_size_px = WebMercator::worldSizePx(zoom_);
     map_scene_->setSceneRect(0.0, 0.0, world_size_px, world_size_px);
+    applying_view_ = true;
     centerOn(WebMercator::geoToGlobalPixel(center_, zoom_));
+    applying_view_ = false;
     updateMarkers();
     updateTiles();
 }
@@ -215,7 +254,7 @@ void OfflineMapWidget::updateMarkers()
 
 void OfflineMapWidget::updateTiles()
 {
-    // 仅保留可视区域及外围一圈。缺失瓦片使用共享占位图，并将一次刷新内的缺失合并为一条日志。
+    // 只在 GUI 线程计算视野与协调 scene；PNG 读取和解码由线程池完成，避免拖动时阻塞界面。
     if (viewport()->width() <= 0 || viewport()->height() <= 0)
     {
         return;
@@ -236,11 +275,8 @@ void OfflineMapWidget::updateTiles()
     const int top = std::max(0, visible_top - 1);
     const int bottom = std::min(maximum_tile, visible_bottom + 1);
 
-    QSet<QString> required_keys;
-    int available_visible_tile_count = 0;
-    int newly_missing_tile_count = 0;
-    QString first_missing_tile_path;
-    const QPixmap placeholder = missingTilePixmap();
+    QSet<QString> next_required_keys;
+    QSet<QString> next_visible_keys;
     for (int tile_y = top; tile_y <= bottom; ++tile_y)
     {
         for (int tile_x = left; tile_x <= right; ++tile_x)
@@ -248,49 +284,22 @@ void OfflineMapWidget::updateTiles()
             const bool is_visible =
                 tile_x >= visible_left && tile_x <= visible_right && tile_y >= visible_top && tile_y <= visible_bottom;
             const QString key = QStringLiteral("%1/%2/%3").arg(zoom_).arg(tile_x).arg(tile_y);
-            required_keys.insert(key);
-            if (tile_items_.contains(key))
+            next_required_keys.insert(key);
+            if (is_visible)
             {
-                if (is_visible && QFileInfo::exists(tilePath(tile_x, tile_y)))
-                {
-                    ++available_visible_tile_count;
-                }
-                continue;
+                next_visible_keys.insert(key);
             }
-
-            const QString path = tilePath(tile_x, tile_y);
-            QPixmap pixmap(path);
-            if (pixmap.isNull())
-            {
-                pixmap = placeholder;
-                if (!logged_missing_tiles_.contains(path))
-                {
-                    logged_missing_tiles_.insert(path);
-                    ++newly_missing_tile_count;
-                    if (first_missing_tile_path.isEmpty())
-                    {
-                        first_missing_tile_path = path;
-                    }
-                }
-            }
-            else
-            {
-                if (is_visible)
-                {
-                    ++available_visible_tile_count;
-                }
-            }
-            QGraphicsPixmapItem *tile_item = map_scene_->addPixmap(pixmap);
-            tile_item->setPos(tile_x * WebMercator::kTileSizePx, tile_y * WebMercator::kTileSizePx);
-            tile_item->setZValue(-100.0);
-            tile_items_.insert(key, tile_item);
         }
     }
 
+    required_tile_keys_ = next_required_keys;
+    visible_tile_keys_ = next_visible_keys;
+
     for (auto iterator = tile_items_.begin(); iterator != tile_items_.end();)
     {
-        if (!required_keys.contains(iterator.key()))
+        if (!required_tile_keys_.contains(iterator.key()))
         {
+            missing_tile_keys_.remove(iterator.key());
             map_scene_->removeItem(iterator.value());
             delete iterator.value();
             iterator = tile_items_.erase(iterator);
@@ -300,20 +309,98 @@ void OfflineMapWidget::updateTiles()
             ++iterator;
         }
     }
-    if (newly_missing_tile_count > 0)
+
+    for (int tile_y = top; tile_y <= bottom; ++tile_y)
     {
-        qWarning() << "OfflineMapWidget:" << newly_missing_tile_count
-                   << "offline tiles missing; first path:" << first_missing_tile_path;
+        for (int tile_x = left; tile_x <= right; ++tile_x)
+        {
+            const QString key = QStringLiteral("%1/%2/%3").arg(zoom_).arg(tile_x).arg(tile_y);
+            if (!tile_items_.contains(key) && !loading_tile_keys_.contains(key))
+            {
+                requestTile(key, tilePath(tile_x, tile_y),
+                            QPointF(tile_x * WebMercator::kTileSizePx, tile_y * WebMercator::kTileSizePx));
+            }
+        }
     }
-    updateMissingLabel(available_visible_tile_count == 0);
+    updateMissingLabel();
 }
 
-void OfflineMapWidget::updateMissingLabel(bool all_missing)
+void OfflineMapWidget::requestTile(const QString &key, const QString &path, const QPointF &position_px)
 {
+    loading_tile_keys_.insert(key);
+    auto *watcher = new QFutureWatcher<QImage>(this);
+    connect(watcher, &QFutureWatcher<QImage>::finished, this,
+            [this, watcher, key, path, position_px]()
+            {
+                const QImage image = watcher->result();
+                watcher->deleteLater();
+                loading_tile_keys_.remove(key);
+                if (!required_tile_keys_.contains(key) || tile_items_.contains(key))
+                {
+                    updateMissingLabel();
+                    return;
+                }
+
+                const bool is_missing = image.isNull();
+                const QPixmap pixmap = is_missing ? missingTilePixmap() : QPixmap::fromImage(image);
+                if (is_missing)
+                {
+                    missing_tile_keys_.insert(key);
+                    recordMissingTile(path);
+                }
+                else
+                {
+                    missing_tile_keys_.remove(key);
+                }
+
+                QGraphicsPixmapItem *tile_item = map_scene_->addPixmap(pixmap);
+                tile_item->setPos(position_px);
+                tile_item->setZValue(-100.0);
+                tile_items_.insert(key, tile_item);
+                updateMissingLabel();
+            });
+    watcher->setFuture(QtConcurrent::run(
+        [path]()
+        {
+            QImage image;
+            image.load(path);
+            return image;
+        }));
+}
+
+void OfflineMapWidget::updateMissingLabel()
+{
+    bool has_pending_visible_tile = false;
+    bool has_available_visible_tile = false;
+    for (const QString &key : std::as_const(visible_tile_keys_))
+    {
+        has_pending_visible_tile = has_pending_visible_tile || loading_tile_keys_.contains(key);
+        has_available_visible_tile =
+            has_available_visible_tile || (tile_items_.contains(key) && !missing_tile_keys_.contains(key));
+    }
+    const bool all_missing = !visible_tile_keys_.isEmpty() && !has_pending_visible_tile && !has_available_visible_tile;
     missing_label_->setVisible(all_missing);
     if (all_missing)
     {
         missing_label_->raise();
+    }
+}
+
+void OfflineMapWidget::recordMissingTile(const QString &path)
+{
+    if (logged_missing_tiles_.contains(path))
+    {
+        return;
+    }
+    logged_missing_tiles_.insert(path);
+    ++pending_missing_tile_count_;
+    if (first_pending_missing_tile_path_.isEmpty())
+    {
+        first_pending_missing_tile_path_ = path;
+    }
+    if (!missing_log_timer_->isActive())
+    {
+        missing_log_timer_->start();
     }
 }
 

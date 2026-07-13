@@ -11,9 +11,11 @@
 class QGraphicsEllipseItem;
 class QGraphicsPixmapItem;
 class QGraphicsSimpleTextItem;
+class QImage;
 class QLabel;
 class QMouseEvent;
 class QResizeEvent;
+class QTimer;
 class QWheelEvent;
 
 namespace utms
@@ -43,12 +45,16 @@ class OfflineMapWidget : public QGraphicsView
     private:
     void updateMarkers();
     void updateTiles();
-    void updateMissingLabel(bool all_missing);
+    void requestTile(const QString &key, const QString &path, const QPointF &position_px);
+    void updateMissingLabel();
+    void recordMissingTile(const QString &path);
     QString tilePath(int tile_x, int tile_y) const;
     static QString targetTooltip(const OnlineMapTarget &target);
 
     QGraphicsScene *map_scene_ = nullptr;
     QLabel *missing_label_ = nullptr;
+    QTimer *tile_update_timer_ = nullptr;
+    QTimer *missing_log_timer_ = nullptr;
     QString tile_root_path_;
     OnlineMapState render_state_;
     GeoPosition center_{25.311724, 110.416819};
@@ -57,7 +63,14 @@ class OfflineMapWidget : public QGraphicsView
     QHash<qint64, QGraphicsEllipseItem *> target_items_;
     QGraphicsEllipseItem *radar_item_ = nullptr;
     QGraphicsSimpleTextItem *selection_label_ = nullptr;
+    QSet<QString> required_tile_keys_;
+    QSet<QString> visible_tile_keys_;
+    QSet<QString> loading_tile_keys_;
+    QSet<QString> missing_tile_keys_;
     QSet<QString> logged_missing_tiles_;
+    QString first_pending_missing_tile_path_;
+    int pending_missing_tile_count_ = 0;
+    bool applying_view_ = false;
 };
 
 } // namespace utms

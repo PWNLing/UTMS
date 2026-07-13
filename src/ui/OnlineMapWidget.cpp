@@ -42,6 +42,26 @@ QJsonObject positionObject(const GeoPosition &position)
     return {{QStringLiteral("longitude"), position.longitude}, {QStringLiteral("latitude"), position.latitude}};
 }
 
+OnlineMapUpdate createFullUpdate(const OnlineMapState &previous_state, const OnlineMapState &next_state)
+{
+    OnlineMapUpdate update;
+    QSet<qint64> next_track_ids;
+    for (const OnlineMapTarget &target : next_state.currentTargets())
+    {
+        next_track_ids.insert(target.track_id);
+        update.upserted_targets.append(target);
+    }
+    for (const TrackData &track : previous_state.currentFrame().tracks)
+    {
+        if (!next_track_ids.contains(track.track_id))
+        {
+            update.removed_track_ids.append(track.track_id);
+        }
+    }
+    update.radar_position = next_state.radarPosition();
+    return update;
+}
+
 } // namespace
 
 OnlineMapWidget::OnlineMapWidget(QWidget *parent)
@@ -98,6 +118,11 @@ void OnlineMapWidget::renderFrame(const OnlineMapState &state, const OnlineMapUp
     {
         emit bridge_->mapUpdateAvailable(createUpdateObject(update));
     }
+}
+
+void OnlineMapWidget::synchronizeState(const OnlineMapState &state)
+{
+    renderFrame(state, createFullUpdate(render_state_, state));
 }
 
 void OnlineMapWidget::setLayer(OnlineMapLayer layer)

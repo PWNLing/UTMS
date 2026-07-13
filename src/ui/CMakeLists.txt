@@ -50,6 +50,7 @@ target_link_libraries(${PROJECT_UI_TARGET}
     PUBLIC
         ${PROJECT_NAMESPACE}::network
         ${PROJECT_NAMESPACE}::map
+        Qt${QT_VERSION_MAJOR}::Concurrent
         Qt${QT_VERSION_MAJOR}::WebChannel
         Qt${QT_VERSION_MAJOR}::WebEngineWidgets
         Qt${QT_VERSION_MAJOR}::Widgets

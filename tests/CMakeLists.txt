@@ -23,3 +23,32 @@ add_test(
     NAME ${PROJECT_TEST_TARGET}
     COMMAND ${PROJECT_TEST_TARGET}
 )
+
+set(PROJECT_MAP_INTERACTION_TEST_TARGET "${PROJECT_NAME}_map_interaction_tests")
+
+add_executable(${PROJECT_MAP_INTERACTION_TEST_TARGET}
+    test_map_interaction.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/OfflineMapWidget.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/OfflineMapWidget.h
+)
+
+target_link_libraries(${PROJECT_MAP_INTERACTION_TEST_TARGET}
+    PRIVATE
+        ${PROJECT_NAMESPACE}::map
+        Qt${QT_VERSION_MAJOR}::Concurrent
+        Qt${QT_VERSION_MAJOR}::Test
+        Qt${QT_VERSION_MAJOR}::Widgets
+)
+
+project_apply_compiler_options(${PROJECT_MAP_INTERACTION_TEST_TARGET})
+
+add_test(
+    NAME ${PROJECT_MAP_INTERACTION_TEST_TARGET}
+    COMMAND ${PROJECT_MAP_INTERACTION_TEST_TARGET}
+)
+
+if(WIN32)
+    set_tests_properties(${PROJECT_TEST_TARGET} ${PROJECT_MAP_INTERACTION_TEST_TARGET} PROPERTIES
+        ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>\;$ENV{PATH}"
+    )
+endif()

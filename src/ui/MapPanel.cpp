@@ -31,16 +31,29 @@ MapPanel::MapPanel(QWidget *parent)
 
 void MapPanel::setFrame(const RadarFrame &frame)
 {
+    const std::optional<qint64> previous_selection = state_.selectedTrackId();
     const OnlineMapUpdate update = state_.replaceFrame(frame);
-    online_map_->renderFrame(state_, update);
+    if (map_mode_ == MapMode::kOnline)
+    {
+        online_map_->renderFrame(state_, update);
+        if (previous_selection != state_.selectedTrackId())
+        {
+            online_map_->setSelectedTrackId(state_.selectedTrackId());
+        }
+        return;
+    }
+
     offline_map_->renderState(state_);
-    online_map_->setSelectedTrackId(state_.selectedTrackId());
+    if (update.automatic_center.has_value())
+    {
+        offline_map_->setView(state_.center(), state_.zoom());
+    }
 }
 
 void MapPanel::setMapMode(MapMode mode)
 {
     map_mode_ = mode;
-    synchronizeViews();
+    synchronizeActiveMap();
     map_stack_->setCurrentWidget(mode == MapMode::kOnline ? static_cast<QWidget *>(online_map_)
                                                           : static_cast<QWidget *>(offline_map_));
 }
@@ -57,8 +70,14 @@ bool MapPanel::setSelectedTrackId(std::optional<qint64> track_id)
     {
         return false;
     }
-    online_map_->setSelectedTrackId(track_id);
-    offline_map_->setSelectedTrackId(track_id);
+    if (map_mode_ == MapMode::kOnline)
+    {
+        online_map_->setSelectedTrackId(track_id);
+    }
+    else
+    {
+        offline_map_->setSelectedTrackId(track_id);
+    }
     return true;
 }
 
@@ -80,7 +99,7 @@ bool MapPanel::selectTarget(qint64 track_id, bool center_on_target)
         return false;
     }
     state_.setCenter(target->position);
-    synchronizeViews();
+    applyViewToActiveMap();
     return true;
 }
 
@@ -90,7 +109,7 @@ bool MapPanel::locateRadar()
     {
         return false;
     }
-    synchronizeViews();
+    applyViewToActiveMap();
     return true;
 }
 
@@ -130,7 +149,6 @@ void MapPanel::handleOnlineViewChanged(const GeoPosition &center, int zoom)
     }
     state_.setCenter(center);
     state_.setZoom(zoom);
-    offline_map_->setView(state_.center(), state_.zoom());
 }
 
 void MapPanel::handleOfflineViewChanged(const GeoPosition &center, int zoom)
@@ -141,13 +159,33 @@ void MapPanel::handleOfflineViewChanged(const GeoPosition &center, int zoom)
     }
     state_.setCenter(center);
     state_.setZoom(zoom);
-    online_map_->setView(state_.center(), state_.zoom());
 }
 
-void MapPanel::synchronizeViews()
+void MapPanel::applyViewToActiveMap()
 {
-    online_map_->setView(state_.center(), state_.zoom());
-    offline_map_->setView(state_.center(), state_.zoom());
+    if (map_mode_ == MapMode::kOnline)
+    {
+        online_map_->setView(state_.center(), state_.zoom());
+    }
+    else
+    {
+        offline_map_->setView(state_.center(), state_.zoom());
+    }
+}
+
+void MapPanel::synchronizeActiveMap()
+{
+    if (map_mode_ == MapMode::kOnline)
+    {
+        online_map_->synchronizeState(state_);
+        online_map_->setLayer(state_.layer());
+        online_map_->setSelectedTrackId(state_.selectedTrackId());
+    }
+    else
+    {
+        offline_map_->renderState(state_);
+    }
+    applyViewToActiveMap();
 }
 
 } // namespace utms

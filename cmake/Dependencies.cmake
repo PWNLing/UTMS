@@ -5,6 +5,7 @@
 # 以后使用 Network、Sql、SerialPort、Charts 等模块时，分别将它们
 # 添加到下面的列表中即可；随后还要让真正使用它们的目标进行链接。
 set(PROJECT_QT_COMPONENTS
+    Concurrent
     Core
     Gui
     Network
