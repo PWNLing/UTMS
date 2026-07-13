@@ -52,10 +52,10 @@ def parse_target_range(value: str) -> tuple[int, int]:
     return minimum, maximum
 
 
-def create_target(track_id: int) -> Target:
+def create_target(track_id: int, target_index: int) -> Target:
     return Target(
         track_id=track_id,
-        target_type=random.choice(TARGET_TYPES),
+        target_type=TARGET_TYPES[target_index % len(TARGET_TYPES)],
         phase=random.uniform(0.0, math.tau),
         radius=random.uniform(0.0002, 0.004),
         speed=random.uniform(-0.16, 0.16),
@@ -92,7 +92,7 @@ def main() -> None:
         parser.error("fps must be greater than zero")
 
     minimum_targets, maximum_targets = args.targets
-    targets = [create_target(2_000 + index) for index in range(maximum_targets)]
+    targets = [create_target(2_000 + index, index) for index in range(maximum_targets)]
     interval_seconds = 1.0 / args.fps
     started_at = time.monotonic()
     next_send_at = started_at

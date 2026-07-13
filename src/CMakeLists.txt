@@ -69,9 +69,9 @@ endif()
 # =========================================================
 # 复制运行时数据
 # =========================================================
-# 构建完成后，将 config/ 和 models/ 复制到可执行程序旁边，方便直接
+# 构建完成后，将 config/ 和 data/ 复制到可执行程序旁边，方便直接
 # 从 Qt Creator 或命令行运行程序。
-foreach(runtime_directory IN ITEMS config models data)
+foreach(runtime_directory IN ITEMS config data)
     if(EXISTS "${PROJECT_SOURCE_DIR}/${runtime_directory}")
         add_custom_command(TARGET ${PROJECT_APP_TARGET} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory

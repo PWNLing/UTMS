@@ -82,7 +82,7 @@ void BottomStatusBar::setUdpStatus(UdpStatus status)
 void BottomStatusBar::updateSimulatedFrameRate()
 {
     const int frame_rate_tenths_fps = QRandomGenerator::global()->bounded(16) + 105;
-    frame_rate_label_->setText(tr("模拟帧率 %1 FPS").arg(frame_rate_tenths_fps / 10.0, 0, 'f', 1));
+    frame_rate_label_->setText(tr("帧率 %1 FPS").arg(frame_rate_tenths_fps / 10.0, 0, 'f', 1));
 }
 
 } // namespace utms
