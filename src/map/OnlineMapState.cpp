@@ -40,7 +40,8 @@ OnlineMapUpdate OnlineMapState::replaceFrame(const RadarFrame &frame)
         const auto previous = targets_by_id_.constFind(track.track_id);
         if (previous == targets_by_id_.cend() || !markerDataMatches(previous.value(), track))
         {
-            update.upserted_targets.append(makeMapTarget(track));
+            const bool content_changed = previous == targets_by_id_.cend() || previous->type != track.type;
+            update.upserted_targets.append(makeMapTarget(track, content_changed));
         }
     }
 
@@ -86,7 +87,7 @@ QVector<OnlineMapTarget> OnlineMapState::currentTargets() const
     targets.reserve(current_frame_.tracks.size());
     for (const TrackData &track : current_frame_.tracks)
     {
-        targets.append(makeMapTarget(track));
+        targets.append(makeMapTarget(track, true));
     }
     return targets;
 }
@@ -136,10 +137,10 @@ bool OnlineMapState::locateRadar()
     return true;
 }
 
-OnlineMapTarget OnlineMapState::makeMapTarget(const TrackData &track)
+OnlineMapTarget OnlineMapState::makeMapTarget(const TrackData &track, bool content_changed)
 {
     return {track.track_id,   track.type,          track.position,         track.velocity_mps,
-            track.distance_m, track.first_seen_at, targetColor(track.type)};
+            track.distance_m, track.first_seen_at, targetColor(track.type), content_changed};
 }
 
 bool OnlineMapState::markerDataMatches(const TrackData &left, const TrackData &right)

@@ -30,6 +30,11 @@ void MapWebBridge::reportMapError(const QString &message)
     emit mapErrorReported(message);
 }
 
+void MapWebBridge::reportMapWarning(const QString &message)
+{
+    emit mapWarningReported(message);
+}
+
 void MapWebBridge::reportViewChanged(double longitude, double latitude, int zoom)
 {
     emit viewChanged(longitude, latitude, zoom);

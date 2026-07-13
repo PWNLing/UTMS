@@ -6,39 +6,51 @@
 #include <QAbstractItemView>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QHash>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
+#include <QSet>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QThread>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include "core/RadarTypes.h"
+#include "map/OnlineMapState.h"
 #include "network/UdpReceiver.h"
 #include "ui/MapPanel.h"
 
 namespace {
 
+QString optionalMeasurement(const std::optional<double> &measurement);
+
 class NumericTableWidgetItem : public QTableWidgetItem
 {
 public:
-    explicit NumericTableWidgetItem(const QString &text, std::optional<double> sort_value)
+    explicit NumericTableWidgetItem(const QString &text, const QVariant &sort_value)
         : QTableWidgetItem(text)
         , sort_value_(sort_value)
     {
     }
 
-    const std::optional<double> &sortValue() const
+    const QVariant &sortValue() const
     {
         return sort_value_;
     }
 
+    void setNumericValue(const QString &text, const QVariant &sort_value)
+    {
+        setText(text);
+        sort_value_ = sort_value;
+    }
+
 private:
-    std::optional<double> sort_value_;
+    QVariant sort_value_;
 };
 
 class TrackTableWidget : public QTableWidget
@@ -59,6 +71,44 @@ public:
             horizontalHeader()->setSortIndicator(sort_column_, sort_order_);
             sortCurrentRows();
         });
+    }
+
+    void replaceTracks(const QVector<utms::TrackData> &tracks)
+    {
+        if (!hasSameTrackIds(tracks)) {
+            rebuildRows(tracks);
+            sortCurrentRows();
+            return;
+        }
+
+        bool sort_value_changed = false;
+        QHash<qint64, const utms::TrackData *> tracks_by_id;
+        tracks_by_id.reserve(tracks.size());
+        for (const utms::TrackData &track : tracks) {
+            tracks_by_id.insert(track.track_id, &track);
+        }
+
+        for (int row = 0; row < rowCount(); ++row) {
+            const qint64 track_id = item(row, 0)->text().toLongLong();
+            const utms::TrackData &track = *tracks_by_id.value(track_id);
+            const QString previous_sort_text = item(row, sort_column_)->text();
+            QVariant previous_numeric_sort_value;
+            if (const auto *numeric_item = dynamic_cast<const NumericTableWidgetItem *>(item(row, sort_column_));
+                numeric_item != nullptr) {
+                previous_numeric_sort_value = numeric_item->sortValue();
+            }
+            updateRow(row, track);
+            const auto *current_numeric_item =
+                dynamic_cast<const NumericTableWidgetItem *>(item(row, sort_column_));
+            const bool numeric_sort_value_changed = current_numeric_item != nullptr &&
+                                                    current_numeric_item->sortValue() != previous_numeric_sort_value;
+            sort_value_changed = sort_value_changed || numeric_sort_value_changed ||
+                                 item(row, sort_column_)->text() != previous_sort_text;
+        }
+
+        if (sort_value_changed) {
+            sortCurrentRows();
+        }
     }
 
     void sortCurrentRows()
@@ -98,10 +148,78 @@ public:
     }
 
 private:
+    bool hasSameTrackIds(const QVector<utms::TrackData> &tracks) const
+    {
+        if (static_cast<qsizetype>(rowCount()) != tracks.size()) {
+            return false;
+        }
+
+        QSet<qint64> track_ids;
+        track_ids.reserve(tracks.size());
+        for (const utms::TrackData &track : tracks) {
+            track_ids.insert(track.track_id);
+        }
+        for (int row = 0; row < rowCount(); ++row) {
+            if (item(row, 0) == nullptr || !track_ids.contains(item(row, 0)->text().toLongLong())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void rebuildRows(const QVector<utms::TrackData> &tracks)
+    {
+        setRowCount(tracks.size());
+        for (qsizetype row = 0; row < tracks.size(); ++row) {
+            updateRow(static_cast<int>(row), tracks.at(row));
+        }
+    }
+
+    void updateRow(int row, const utms::TrackData &track)
+    {
+        const QStringList values = {
+            QString::number(track.track_id),
+            utms::targetTypeDisplayName(track.type),
+            QString::number(track.position.longitude, 'f', 7),
+            QString::number(track.position.latitude, 'f', 7),
+            optionalMeasurement(track.velocity_mps),
+            optionalMeasurement(track.distance_m),
+            track.first_seen_at.toString(QStringLiteral("HH:mm:ss"))};
+
+        for (qsizetype column = 0; column < values.size(); ++column) {
+            QTableWidgetItem *table_item = item(row, column);
+            if (column == 0 || column == 4 || column == 5) {
+                QVariant sort_value;
+                if (column == 0) {
+                    sort_value = QVariant::fromValue(track.track_id);
+                } else {
+                    const std::optional<double> &measurement = column == 4 ? track.velocity_mps : track.distance_m;
+                    if (measurement.has_value()) {
+                        sort_value = measurement.value();
+                    }
+                }
+                auto *numeric_item = dynamic_cast<NumericTableWidgetItem *>(table_item);
+                if (numeric_item == nullptr) {
+                    numeric_item = new NumericTableWidgetItem(values.at(column), sort_value);
+                    table_item = numeric_item;
+                    setItem(row, column, table_item);
+                } else {
+                    numeric_item->setNumericValue(values.at(column), sort_value);
+                }
+            } else if (table_item == nullptr) {
+                table_item = new QTableWidgetItem(values.at(column));
+                setItem(row, column, table_item);
+            } else {
+                table_item->setText(values.at(column));
+            }
+            table_item->setTextAlignment(Qt::AlignCenter);
+        }
+    }
+
     static bool isMissingNumericValue(const QTableWidgetItem *item)
     {
         const auto *numeric_item = dynamic_cast<const NumericTableWidgetItem *>(item);
-        return numeric_item != nullptr && !numeric_item->sortValue().has_value();
+        return numeric_item != nullptr && !numeric_item->sortValue().isValid();
     }
 
     static int compareItems(const QTableWidgetItem *left, const QTableWidgetItem *right)
@@ -111,13 +229,21 @@ private:
         if (left_numeric != nullptr && right_numeric != nullptr) {
             const auto &left_value = left_numeric->sortValue();
             const auto &right_value = right_numeric->sortValue();
-            if (left_value.has_value() != right_value.has_value()) {
-                return left_value.has_value() ? -1 : 1;
+            if (left_value.isValid() != right_value.isValid()) {
+                return left_value.isValid() ? -1 : 1;
             }
-            if (!left_value.has_value() || left_value.value() == right_value.value()) {
+            if (!left_value.isValid()) {
                 return 0;
             }
-            return left_value.value() < right_value.value() ? -1 : 1;
+            if (left_value.metaType().id() == QMetaType::LongLong &&
+                right_value.metaType().id() == QMetaType::LongLong) {
+                const qint64 left_integer = left_value.toLongLong();
+                const qint64 right_integer = right_value.toLongLong();
+                return left_integer == right_integer ? 0 : (left_integer < right_integer ? -1 : 1);
+            }
+            const double left_number = left_value.toDouble();
+            const double right_number = right_value.toDouble();
+            return left_number == right_number ? 0 : (left_number < right_number ? -1 : 1);
         }
         return QString::localeAwareCompare(left->text(), right->text());
     }
@@ -200,36 +326,7 @@ void MainWindow::handleUdpStatusChanged(utms::UdpStatus status, const QString &d
 void MainWindow::updateCurrentFrame(const utms::RadarFrame &frame)
 {
     map_panel_->setFrame(frame);
-    track_table_->setRowCount(frame.tracks.size());
-
-    for (qsizetype row = 0; row < frame.tracks.size(); ++row) {
-        const utms::TrackData &track = frame.tracks.at(row);
-        const QStringList values = {
-            QString::number(track.track_id),
-            utms::targetTypeDisplayName(track.type),
-            QString::number(track.position.longitude, 'f', 7),
-            QString::number(track.position.latitude, 'f', 7),
-            optionalMeasurement(track.velocity_mps),
-            optionalMeasurement(track.distance_m),
-            track.first_seen_at.toString(QStringLiteral("HH:mm:ss"))};
-
-        for (qsizetype column = 0; column < values.size(); ++column) {
-            QTableWidgetItem *item = nullptr;
-            if (column == 0) {
-                item = new NumericTableWidgetItem(values.at(column), static_cast<double>(track.track_id));
-            } else if (column == 4) {
-                item = new NumericTableWidgetItem(values.at(column), track.velocity_mps);
-            } else if (column == 5) {
-                item = new NumericTableWidgetItem(values.at(column), track.distance_m);
-            } else {
-                item = new QTableWidgetItem(values.at(column));
-            }
-            item->setTextAlignment(Qt::AlignCenter);
-            track_table_->setItem(row, column, item);
-        }
-    }
-
-    static_cast<TrackTableWidget *>(track_table_)->sortCurrentRows();
+    static_cast<TrackTableWidget *>(track_table_)->replaceTracks(frame.tracks);
 }
 
 void MainWindow::setupUi()

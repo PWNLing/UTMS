@@ -493,7 +493,6 @@ void RadarCoreTest::computesIncrementalOnlineMapUpdates() {
     utms::RadarFrame second_frame;
     utms::TrackData moved_track = makeTrack(2);
     moved_track.position.longitude = 110.42;
-    moved_track.type = utms::TargetType::kTruck;
     second_frame.tracks = {moved_track, makeTrack(3)};
 
     const utms::OnlineMapUpdate second_update = map_state.replaceFrame(second_frame);
@@ -501,8 +500,16 @@ void RadarCoreTest::computesIncrementalOnlineMapUpdates() {
     QCOMPARE(second_update.upserted_targets.size(), 2);
     QCOMPARE(second_update.removed_track_ids, QVector<qint64>{1});
     QCOMPARE(second_update.upserted_targets.constFirst().track_id, 2);
-    QCOMPARE(second_update.upserted_targets.constFirst().color, QStringLiteral("#e67e22"));
+    QVERIFY(!second_update.upserted_targets.constFirst().content_changed);
+    QVERIFY(second_update.upserted_targets.at(1).content_changed);
     QCOMPARE(map_state.currentFrame().tracks.size(), 2);
+
+    moved_track.type = utms::TargetType::kTruck;
+    second_frame.tracks = {moved_track, makeTrack(3)};
+    const utms::OnlineMapUpdate type_update = map_state.replaceFrame(second_frame);
+    QCOMPARE(type_update.upserted_targets.size(), 1);
+    QCOMPARE(type_update.upserted_targets.constFirst().color, QStringLiteral("#e67e22"));
+    QVERIFY(type_update.upserted_targets.constFirst().content_changed);
 }
 
 void RadarCoreTest::automaticallyCentersOnRadarOnlyOnce() {

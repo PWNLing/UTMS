@@ -18,6 +18,8 @@ Run `UTMS`, leave the default UDP port at `10000`, and click **启动监听**. T
 
 Copy `config/amap.example.json` to `config/amap.json`, then enter an Amap Web JavaScript API Key and its security code. The real file is ignored by Git and is copied beside the executable for local builds. Without a complete configuration, the online-map area displays an explicit error; it does not switch map modes automatically.
 
+Create and manage the Web JavaScript API Key in the [Amap developer console](https://console.amap.com/dev/key/app). Keep both configuration values as quoted JSON strings and do not add comments to `amap.json`.
+
 The online map starts in street mode at longitude `110.416819`, latitude `25.311724`, zoom `17` (allowed range `15` to `19`). Use the map controls on the right to switch to satellite imagery or locate the latest valid radar position.
 
 ## UDP Simulator

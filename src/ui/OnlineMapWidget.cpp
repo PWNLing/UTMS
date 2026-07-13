@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QStackedLayout>
+#include <QTimer>
 #include <QWebChannel>
 #include <QWebEnginePage>
 #include <QWebEngineView>
@@ -32,7 +33,8 @@ QJsonObject targetObject(const OnlineMapTarget &target)
             {QStringLiteral("color"), target.color},
             {QStringLiteral("velocity"), optionalMeasurement(target.velocity_mps)},
             {QStringLiteral("distance"), optionalMeasurement(target.distance_m)},
-            {QStringLiteral("firstSeen"), target.first_seen_at.toString(QStringLiteral("HH:mm:ss"))}};
+            {QStringLiteral("firstSeen"), target.first_seen_at.toString(QStringLiteral("HH:mm:ss"))},
+            {QStringLiteral("contentChanged"), target.content_changed}};
 }
 
 QJsonObject positionObject(const GeoPosition &position)
@@ -69,6 +71,7 @@ OnlineMapWidget::OnlineMapWidget(QWidget *parent)
 
     connect(bridge_, &MapWebBridge::pageReadyReported, this, &OnlineMapWidget::handlePageReady);
     connect(bridge_, &MapWebBridge::mapErrorReported, this, &OnlineMapWidget::handleMapError);
+    connect(bridge_, &MapWebBridge::mapWarningReported, this, &OnlineMapWidget::handleMapWarning);
     connect(bridge_, &MapWebBridge::viewChanged, this, &OnlineMapWidget::handleViewChanged);
     connect(bridge_, &MapWebBridge::targetClicked, this, &OnlineMapWidget::targetClicked);
     connect(web_view_, &QWebEngineView::loadFinished, this,
@@ -78,6 +81,11 @@ OnlineMapWidget::OnlineMapWidget(QWidget *parent)
                 {
                     handleMapError(tr("在线地图本地页面加载失败"));
                 }
+            });
+    connect(web_view_->page(), &QWebEnginePage::renderProcessTerminated, this,
+            [this](QWebEnginePage::RenderProcessTerminationStatus status, int exit_code)
+            {
+                handleRenderProcessTermination(static_cast<int>(status), exit_code);
             });
 
     stacked_layout_->setCurrentWidget(web_view_);
@@ -120,7 +128,20 @@ bool OnlineMapWidget::locateRadar()
 void OnlineMapWidget::handlePageReady()
 {
     map_ready_ = true;
+    stacked_layout_->setCurrentWidget(web_view_);
     emit bridge_->initialStateAvailable(createInitialState());
+
+    if (render_reload_attempts_ > 0)
+    {
+        QTimer::singleShot(30'000, this,
+                           [this]()
+                           {
+                               if (map_ready_)
+                               {
+                                   render_reload_attempts_ = 0;
+                               }
+                           });
+    }
 }
 
 void OnlineMapWidget::handleMapError(const QString &message)
@@ -128,6 +149,28 @@ void OnlineMapWidget::handleMapError(const QString &message)
     qWarning() << "OnlineMapWidget:" << message;
     showError(tr("在线地图加载失败：%1").arg(message));
     emit mapError(message);
+}
+
+void OnlineMapWidget::handleMapWarning(const QString &message)
+{
+    qWarning() << "OnlineMapWidget: runtime map warning:" << message;
+}
+
+void OnlineMapWidget::handleRenderProcessTermination(int status, int exit_code)
+{
+    const QString detail = tr("在线地图渲染进程退出（状态 %1，代码 %2）").arg(status).arg(exit_code);
+    qWarning() << "OnlineMapWidget:" << detail;
+    map_ready_ = false;
+
+    if (render_reload_attempts_ < 1)
+    {
+        ++render_reload_attempts_;
+        web_view_->reload();
+        return;
+    }
+
+    showError(detail);
+    emit mapError(detail);
 }
 
 void OnlineMapWidget::handleViewChanged(double longitude, double latitude, int zoom)

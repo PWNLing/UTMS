@@ -21,12 +21,14 @@ class MapWebBridge : public QObject
   public slots:
     void reportPageReady();
     void reportMapError(const QString &message);
+    void reportMapWarning(const QString &message);
     void reportViewChanged(double longitude, double latitude, int zoom);
     void reportTargetClicked(const QString &track_id);
 
   signals:
     void pageReadyReported();
     void mapErrorReported(const QString &message);
+    void mapWarningReported(const QString &message);
     void viewChanged(double longitude, double latitude, int zoom);
     void targetClicked(qint64 track_id);
     void initialStateAvailable(const QJsonObject &state);

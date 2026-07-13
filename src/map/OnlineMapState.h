@@ -26,6 +26,7 @@ struct OnlineMapTarget
     std::optional<double> distance_m;
     QDateTime first_seen_at;
     QString color;
+    bool content_changed = false;
 };
 
 struct OnlineMapUpdate
@@ -54,7 +55,7 @@ class OnlineMapState
     bool locateRadar();
 
   private:
-    static OnlineMapTarget makeMapTarget(const TrackData &track);
+    static OnlineMapTarget makeMapTarget(const TrackData &track, bool content_changed);
     static bool markerDataMatches(const TrackData &left, const TrackData &right);
 
     RadarFrame current_frame_;

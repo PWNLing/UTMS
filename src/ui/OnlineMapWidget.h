@@ -32,11 +32,13 @@ class OnlineMapWidget : public QWidget
   private slots:
     void handlePageReady();
     void handleMapError(const QString &message);
+    void handleMapWarning(const QString &message);
     void handleViewChanged(double longitude, double latitude, int zoom);
 
   private:
     QJsonObject createInitialState() const;
     static QJsonObject createUpdateObject(const OnlineMapUpdate &update);
+    void handleRenderProcessTermination(int status, int exit_code);
     void showError(const QString &message);
 
     OnlineMapState state_;
@@ -45,6 +47,7 @@ class OnlineMapWidget : public QWidget
     QLabel *error_label_ = nullptr;
     MapWebBridge *bridge_ = nullptr;
     bool map_ready_ = false;
+    int render_reload_attempts_ = 0;
 };
 
 } // namespace utms

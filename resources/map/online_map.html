@@ -23,9 +23,12 @@
     let bridge;
     let map;
     let radarMarker;
+    let streetLayer;
     let satelliteLayer;
     let roadNetLayer;
     let loadTimeout;
+    let lastWarningAt = 0;
+    let pageReadyReported = false;
 
     const showError = (message) => {
         clearTimeout(loadTimeout);
@@ -33,6 +36,25 @@
         element.textContent = message;
         element.style.display = 'flex';
         if (bridge) bridge.reportMapError(message);
+    };
+
+    const reportWarning = message => {
+        const now = Date.now();
+        if (bridge && now - lastWarningAt >= 5000) {
+            lastWarningAt = now;
+            bridge.reportMapWarning(message);
+        }
+    };
+
+    const handleRuntimeError = event => {
+        const message = String(event.info || event.message || '未知错误');
+        const authenticationError = /INVALID_USER|USERKEY|USER_KEY|INSUFFICIENT_PRIVILEGES|鉴权|密钥|权限/i
+            .test(message);
+        if (!pageReadyReported || authenticationError) {
+            showError(`高德地图加载失败：${message}`);
+        } else {
+            reportWarning(`高德地图运行错误：${message}`);
+        }
     };
 
     const position = value => [value.longitude, value.latitude];
@@ -55,10 +77,12 @@
             map.add(marker);
             entry = {marker, info, target};
             targetMarkers.set(String(target.trackId), entry);
+            return;
         }
+        const colorChanged = entry.target.color !== target.color;
         entry.target = target;
         entry.marker.setPosition(position(target));
-        entry.marker.setContent(markerContent(target.color));
+        if (target.contentChanged && colorChanged) entry.marker.setContent(markerContent(target.color));
     };
 
     const updateRadar = radar => {
@@ -73,12 +97,9 @@
 
     const setLayer = layer => {
         if (layer === 'satellite') {
-            if (!satelliteLayer) satelliteLayer = new AMap.TileLayer.Satellite();
-            if (!roadNetLayer) roadNetLayer = new AMap.TileLayer.RoadNet();
-            map.add([satelliteLayer, roadNetLayer]);
+            map.setLayers([satelliteLayer, roadNetLayer]);
         } else {
-            if (satelliteLayer) map.remove(satelliteLayer);
-            if (roadNetLayer) map.remove(roadNetLayer);
+            map.setLayers([streetLayer]);
         }
     };
 
@@ -112,12 +133,17 @@
         script.onerror = () => showError('高德地图脚本加载失败，请检查网络、Key 和安全密钥');
         script.onload = () => {
             try {
+                streetLayer = new AMap.TileLayer();
+                satelliteLayer = new AMap.TileLayer.Satellite();
+                roadNetLayer = new AMap.TileLayer.RoadNet();
                 map = new AMap.Map('map', {center: [110.416819, 25.311724], zoom: 17,
-                    zooms: [15, 19], viewMode: '2D', resizeEnable: true});
+                    zooms: [15, 19], viewMode: '2D', resizeEnable: true, layers: [streetLayer]});
                 map.addControl(new AMap.Scale());
                 map.addControl(new AMap.ToolBar({position: 'RB', liteStyle: true}));
-                map.on('error', event => showError(`高德地图加载失败：${event.info || event.message || '未知错误'}`));
+                map.on('error', handleRuntimeError);
                 map.on('complete', () => {
+                    if (pageReadyReported) return;
+                    pageReadyReported = true;
                     clearTimeout(loadTimeout);
                     document.getElementById('message').style.display = 'none';
                     bridge.reportPageReady();
