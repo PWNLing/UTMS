@@ -16,8 +16,8 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QThread>
-#include <QVariant>
 #include <QVBoxLayout>
+#include <QVariant>
 #include <QWidget>
 
 #include "core/RadarTypes.h"
@@ -98,10 +98,9 @@ public:
                 previous_numeric_sort_value = numeric_item->sortValue();
             }
             updateRow(row, track);
-            const auto *current_numeric_item =
-                dynamic_cast<const NumericTableWidgetItem *>(item(row, sort_column_));
-            const bool numeric_sort_value_changed = current_numeric_item != nullptr &&
-                                                    current_numeric_item->sortValue() != previous_numeric_sort_value;
+            const auto *current_numeric_item = dynamic_cast<const NumericTableWidgetItem *>(item(row, sort_column_));
+            const bool numeric_sort_value_changed =
+                current_numeric_item != nullptr && current_numeric_item->sortValue() != previous_numeric_sort_value;
             sort_value_changed = sort_value_changed || numeric_sort_value_changed ||
                                  item(row, sort_column_)->text() != previous_sort_text;
         }
@@ -177,14 +176,13 @@ private:
 
     void updateRow(int row, const utms::TrackData &track)
     {
-        const QStringList values = {
-            QString::number(track.track_id),
-            utms::targetTypeDisplayName(track.type),
-            QString::number(track.position.longitude, 'f', 7),
-            QString::number(track.position.latitude, 'f', 7),
-            optionalMeasurement(track.velocity_mps),
-            optionalMeasurement(track.distance_m),
-            track.first_seen_at.toString(QStringLiteral("HH:mm:ss"))};
+        const QStringList values = {QString::number(track.track_id),
+                                    utms::targetTypeDisplayName(track.type),
+                                    QString::number(track.position.longitude, 'f', 7),
+                                    QString::number(track.position.latitude, 'f', 7),
+                                    optionalMeasurement(track.velocity_mps),
+                                    optionalMeasurement(track.distance_m),
+                                    track.first_seen_at.toString(QStringLiteral("HH:mm:ss"))};
 
         for (qsizetype column = 0; column < values.size(); ++column) {
             QTableWidgetItem *table_item = item(row, column);
@@ -257,7 +255,7 @@ QString optionalMeasurement(const std::optional<double> &measurement)
     return measurement.has_value() ? QString::number(measurement.value(), 'f', 2) : QStringLiteral("--");
 }
 
-}  // namespace
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -354,6 +352,9 @@ void MainWindow::setupUi()
     start_button_ = new QPushButton(tr("启动监听"), system_config_widget);
     stop_button_ = new QPushButton(tr("停止监听"), system_config_widget);
     status_label_ = new QLabel(system_config_widget);
+    map_mode_combo_box_ = new QComboBox(system_config_widget);
+    map_mode_combo_box_->addItem(tr("在线地图"), static_cast<int>(utms::MapMode::kOnline));
+    map_mode_combo_box_->addItem(tr("离线地图"), static_cast<int>(utms::MapMode::kOffline));
     map_layer_combo_box_ = new QComboBox(system_config_widget);
     map_layer_combo_box_->addItem(tr("街道图"), static_cast<int>(utms::OnlineMapLayer::kStreet));
     map_layer_combo_box_->addItem(tr("卫星图"), static_cast<int>(utms::OnlineMapLayer::kSatellite));
@@ -368,6 +369,8 @@ void MainWindow::setupUi()
     control_layout->addStretch();
 
     auto *map_control_layout = new QHBoxLayout();
+    map_control_layout->addWidget(new QLabel(tr("地图模式"), system_config_widget));
+    map_control_layout->addWidget(map_mode_combo_box_);
     map_control_layout->addWidget(new QLabel(tr("在线图层"), system_config_widget));
     map_control_layout->addWidget(map_layer_combo_box_);
     map_control_layout->addWidget(locate_radar_button_);
@@ -402,14 +405,45 @@ void MainWindow::setupUi()
     main_layout->addWidget(content_splitter);
     setCentralWidget(central_widget);
 
-    connect(start_button_, &QPushButton::clicked, this, [this]() {
-        emit startListeningRequested(static_cast<quint16>(port_spin_box_->value()));
-    });
+    connect(start_button_, &QPushButton::clicked, this,
+            [this]() { emit startListeningRequested(static_cast<quint16>(port_spin_box_->value())); });
     connect(stop_button_, &QPushButton::clicked, this, &MainWindow::stopListeningRequested);
+    connect(map_mode_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        const auto mode = static_cast<utms::MapMode>(map_mode_combo_box_->itemData(index).toInt());
+        if (mode == utms::MapMode::kOffline) {
+            const int street_index = map_layer_combo_box_->findData(static_cast<int>(utms::OnlineMapLayer::kStreet));
+            if (street_index >= 0) {
+                map_layer_combo_box_->setCurrentIndex(street_index);
+            }
+        }
+        map_panel_->setMapMode(mode);
+        map_layer_combo_box_->setEnabled(mode == utms::MapMode::kOnline);
+    });
     connect(map_layer_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         map_panel_->setOnlineLayer(static_cast<utms::OnlineMapLayer>(map_layer_combo_box_->itemData(index).toInt()));
     });
     connect(locate_radar_button_, &QPushButton::clicked, this, [this]() { map_panel_->locateRadar(); });
+    connect(track_table_, &QTableWidget::cellClicked, this, [this](int row, int) {
+        if (const QTableWidgetItem *track_id_item = track_table_->item(row, 0); track_id_item != nullptr) {
+            bool converted = false;
+            const qint64 track_id = track_id_item->text().toLongLong(&converted);
+            if (!converted || !map_panel_->selectTarget(track_id, true)) {
+                qWarning() << "MainWindow: failed to select table track" << track_id_item->text();
+            }
+        }
+    });
+    connect(map_panel_, &utms::MapPanel::targetClicked, this, [this](qint64 track_id) {
+        for (int row = 0; row < track_table_->rowCount(); ++row) {
+            bool converted = false;
+            const qint64 row_track_id =
+                track_table_->item(row, 0) != nullptr ? track_table_->item(row, 0)->text().toLongLong(&converted) : 0;
+            if (converted && row_track_id == track_id) {
+                track_table_->selectRow(row);
+                track_table_->scrollToItem(track_table_->item(row, 0));
+                return;
+            }
+        }
+    });
 }
 
 void MainWindow::setupUdpWorker()

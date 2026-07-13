@@ -15,7 +15,7 @@ class MapPanel;
 class UdpReceiver;
 enum class UdpStatus;
 struct RadarFrame;
-}  // namespace utms
+} // namespace utms
 
 class MainWindow : public QMainWindow
 {
@@ -48,6 +48,7 @@ private:
     QLabel *status_label_ = nullptr;
     QTableWidget *track_table_ = nullptr;
     utms::MapPanel *map_panel_ = nullptr;
+    QComboBox *map_mode_combo_box_ = nullptr;
     QComboBox *map_layer_combo_box_ = nullptr;
     QPushButton *locate_radar_button_ = nullptr;
     QThread *udp_thread_ = nullptr;

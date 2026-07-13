@@ -5,6 +5,8 @@ add_library(${PROJECT_MAP_TARGET} STATIC
     AmapConfig.h
     OnlineMapState.cpp
     OnlineMapState.h
+    WebMercator.cpp
+    WebMercator.h
 )
 
 add_library(${PROJECT_NAMESPACE}::map ALIAS ${PROJECT_MAP_TARGET})

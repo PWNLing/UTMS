@@ -72,7 +72,8 @@ OnlineMapWidget::OnlineMapWidget(QWidget *parent)
     connect(bridge_, &MapWebBridge::pageReadyReported, this, &OnlineMapWidget::handlePageReady);
     connect(bridge_, &MapWebBridge::mapErrorReported, this, &OnlineMapWidget::handleMapError);
     connect(bridge_, &MapWebBridge::mapWarningReported, this, &OnlineMapWidget::handleMapWarning);
-    connect(bridge_, &MapWebBridge::viewChanged, this, &OnlineMapWidget::handleViewChanged);
+    connect(bridge_, &MapWebBridge::viewChanged, this,
+            [this](double longitude, double latitude, int zoom) { emit viewChanged({latitude, longitude}, zoom); });
     connect(bridge_, &MapWebBridge::targetClicked, this, &OnlineMapWidget::targetClicked);
     connect(web_view_, &QWebEngineView::loadFinished, this,
             [this](bool success)
@@ -84,17 +85,15 @@ OnlineMapWidget::OnlineMapWidget(QWidget *parent)
             });
     connect(web_view_->page(), &QWebEnginePage::renderProcessTerminated, this,
             [this](QWebEnginePage::RenderProcessTerminationStatus status, int exit_code)
-            {
-                handleRenderProcessTermination(static_cast<int>(status), exit_code);
-            });
+            { handleRenderProcessTermination(static_cast<int>(status), exit_code); });
 
     stacked_layout_->setCurrentWidget(web_view_);
     web_view_->load(QUrl(QStringLiteral("qrc:/map/online_map.html")));
 }
 
-void OnlineMapWidget::setFrame(const RadarFrame &frame)
+void OnlineMapWidget::renderFrame(const OnlineMapState &state, const OnlineMapUpdate &update)
 {
-    const OnlineMapUpdate update = state_.replaceFrame(frame);
+    render_state_ = state;
     if (map_ready_)
     {
         emit bridge_->mapUpdateAvailable(createUpdateObject(update));
@@ -103,7 +102,7 @@ void OnlineMapWidget::setFrame(const RadarFrame &frame)
 
 void OnlineMapWidget::setLayer(OnlineMapLayer layer)
 {
-    state_.setLayer(layer);
+    render_state_.setLayer(layer);
     if (map_ready_)
     {
         emit bridge_->layerUpdated(layer == OnlineMapLayer::kStreet ? QStringLiteral("street")
@@ -111,18 +110,27 @@ void OnlineMapWidget::setLayer(OnlineMapLayer layer)
     }
 }
 
-bool OnlineMapWidget::locateRadar()
+void OnlineMapWidget::setView(const GeoPosition &center, int zoom)
 {
-    if (!state_.locateRadar())
-    {
-        return false;
-    }
-    const GeoPosition center = state_.center();
+    render_state_.setCenter(center);
+    render_state_.setZoom(zoom);
     if (map_ready_)
     {
-        emit bridge_->centerUpdated(center.longitude, center.latitude);
+        emit bridge_->viewUpdated(center.longitude, center.latitude, render_state_.zoom());
     }
-    return true;
+}
+
+void OnlineMapWidget::setSelectedTrackId(std::optional<qint64> track_id)
+{
+    if (!render_state_.setSelectedTrackId(track_id))
+    {
+        qWarning() << "OnlineMapWidget: ignored selection for unknown track" << track_id.value_or(0);
+        return;
+    }
+    if (map_ready_)
+    {
+        emit bridge_->selectionUpdated(track_id.has_value() ? QString::number(track_id.value()) : QString());
+    }
 }
 
 void OnlineMapWidget::handlePageReady()
@@ -173,29 +181,27 @@ void OnlineMapWidget::handleRenderProcessTermination(int status, int exit_code)
     emit mapError(detail);
 }
 
-void OnlineMapWidget::handleViewChanged(double longitude, double latitude, int zoom)
-{
-    state_.setCenter({latitude, longitude});
-    state_.setZoom(zoom);
-}
-
 QJsonObject OnlineMapWidget::createInitialState() const
 {
     QJsonArray targets;
-    for (const OnlineMapTarget &target : state_.currentTargets())
+    for (const OnlineMapTarget &target : render_state_.currentTargets())
     {
         targets.append(targetObject(target));
     }
 
-    QJsonObject state{{QStringLiteral("center"), positionObject(state_.center())},
-                      {QStringLiteral("zoom"), state_.zoom()},
-                      {QStringLiteral("layer"), state_.layer() == OnlineMapLayer::kStreet
+    QJsonObject state{{QStringLiteral("center"), positionObject(render_state_.center())},
+                      {QStringLiteral("zoom"), render_state_.zoom()},
+                      {QStringLiteral("layer"), render_state_.layer() == OnlineMapLayer::kStreet
                                                     ? QStringLiteral("street")
                                                     : QStringLiteral("satellite")},
                       {QStringLiteral("targets"), targets}};
-    if (state_.radarPosition().has_value())
+    if (render_state_.radarPosition().has_value())
     {
-        state.insert(QStringLiteral("radar"), positionObject(state_.radarPosition().value()));
+        state.insert(QStringLiteral("radar"), positionObject(render_state_.radarPosition().value()));
+    }
+    if (render_state_.selectedTrackId().has_value())
+    {
+        state.insert(QStringLiteral("selectedTrackId"), QString::number(render_state_.selectedTrackId().value()));
     }
     return state;
 }

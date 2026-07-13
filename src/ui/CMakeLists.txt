@@ -12,6 +12,8 @@ add_library(${PROJECT_UI_TARGET} STATIC
     MapPanel.h
     MapWebBridge.cpp
     MapWebBridge.h
+    OfflineMapWidget.cpp
+    OfflineMapWidget.h
     OnlineMapWidget.cpp
     OnlineMapWidget.h
     mainwindow.cpp

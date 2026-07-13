@@ -39,7 +39,7 @@ struct OnlineMapUpdate
 
 class OnlineMapState
 {
-  public:
+    public:
     OnlineMapUpdate replaceFrame(const RadarFrame &frame);
 
     const RadarFrame &currentFrame() const;
@@ -48,13 +48,15 @@ class OnlineMapState
     int zoom() const;
     OnlineMapLayer layer() const;
     std::optional<GeoPosition> radarPosition() const;
+    std::optional<qint64> selectedTrackId() const;
 
     void setCenter(const GeoPosition &center);
     void setZoom(int zoom);
     void setLayer(OnlineMapLayer layer);
+    bool setSelectedTrackId(std::optional<qint64> track_id);
     bool locateRadar();
 
-  private:
+    private:
     static OnlineMapTarget makeMapTarget(const TrackData &track, bool content_changed);
     static bool markerDataMatches(const TrackData &left, const TrackData &right);
 
@@ -64,6 +66,7 @@ class OnlineMapState
     std::optional<GeoPosition> radar_position_;
     int zoom_ = 17;
     OnlineMapLayer layer_ = OnlineMapLayer::kStreet;
+    std::optional<qint64> selected_track_id_;
     bool automatically_centered_ = false;
 };
 

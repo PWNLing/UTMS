@@ -11,6 +11,7 @@
                    font: 15px "Microsoft YaHei", sans-serif; text-align: center; }
         .point { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,.9);
                  box-shadow: 0 1px 3px rgba(0,0,0,.45); box-sizing: border-box; }
+        .point.selected { width: 14px; height: 14px; border: 3px solid #f1c40f; }
     </style>
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 </head>
@@ -29,6 +30,7 @@
     let loadTimeout;
     let lastWarningAt = 0;
     let pageReadyReported = false;
+    let selectedTrackId = null;
 
     const showError = (message) => {
         clearTimeout(loadTimeout);
@@ -58,7 +60,8 @@
     };
 
     const position = value => [value.longitude, value.latitude];
-    const markerContent = color => `<div class="point" style="background:${color}"></div>`;
+    const markerContent = (color, selected = false) =>
+        `<div class="point${selected ? ' selected' : ''}" style="background:${color}"></div>`;
     const measurement = value => value === null ? '--' : Number(value).toFixed(2);
     const tooltip = target => `航迹 ID: ${target.trackId}<br>类别: ${target.type}<br>`
         + `经度: ${target.longitude.toFixed(7)}<br>纬度: ${target.latitude.toFixed(7)}<br>`
@@ -68,7 +71,8 @@
     const upsertTarget = target => {
         let entry = targetMarkers.get(String(target.trackId));
         if (!entry) {
-            const marker = new AMap.Marker({anchor: 'center', content: markerContent(target.color),
+            const marker = new AMap.Marker({anchor: 'center',
+                content: markerContent(target.color, String(target.trackId) === selectedTrackId),
                 position: position(target), zIndex: 120, extData: target.trackId});
             marker.on('click', () => bridge.reportTargetClicked(String(marker.getExtData())));
             const info = new AMap.InfoWindow({offset: new AMap.Pixel(0, -8)});
@@ -82,7 +86,18 @@
         const colorChanged = entry.target.color !== target.color;
         entry.target = target;
         entry.marker.setPosition(position(target));
-        if (target.contentChanged && colorChanged) entry.marker.setContent(markerContent(target.color));
+        if (target.contentChanged && colorChanged) {
+            entry.marker.setContent(markerContent(target.color, String(target.trackId) === selectedTrackId));
+        }
+    };
+
+    const setSelection = trackId => {
+        const previous = selectedTrackId;
+        selectedTrackId = trackId || null;
+        [previous, selectedTrackId].forEach(id => {
+            const entry = id === null ? null : targetMarkers.get(String(id));
+            if (entry) entry.marker.setContent(markerContent(entry.target.color, String(id) === selectedTrackId));
+        });
     };
 
     const updateRadar = radar => {
@@ -108,6 +123,7 @@
         setLayer(state.layer);
         if (state.radar) updateRadar(state.radar);
         state.targets.forEach(upsertTarget);
+        setSelection(state.selectedTrackId || null);
     };
 
     const applyUpdate = update => {
@@ -125,8 +141,10 @@
         window._AMapSecurityConfig = {securityJsCode: bridge.securityCode};
         bridge.initialStateAvailable.connect(initializeMap);
         bridge.mapUpdateAvailable.connect(applyUpdate);
-        bridge.centerUpdated.connect((longitude, latitude) => map.setCenter([longitude, latitude], true));
+        bridge.viewUpdated.connect((longitude, latitude, zoom) =>
+            map.setZoomAndCenter(zoom, [longitude, latitude], true));
         bridge.layerUpdated.connect(setLayer);
+        bridge.selectionUpdated.connect(setSelection);
 
         const script = document.createElement('script');
         script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(bridge.apiKey)}&plugin=AMap.Scale,AMap.ToolBar`;

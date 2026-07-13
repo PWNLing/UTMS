@@ -11,6 +11,7 @@
 #include "core/RadarJsonParser.h"
 #include "map/AmapConfig.h"
 #include "map/OnlineMapState.h"
+#include "map/WebMercator.h"
 #include "network/UdpReceiver.h"
 
 namespace {
@@ -79,6 +80,9 @@ private slots:
     void rejectsIncompleteAmapConfiguration();
     void computesIncrementalOnlineMapUpdates();
     void automaticallyCentersOnRadarOnlyOnce();
+    void convertsWebMercatorCoordinates();
+    void clampsWebMercatorLatitude();
+    void preservesAndClearsSharedMapSelection();
 };
 
 void RadarCoreTest::parsesValidJson() {
@@ -533,6 +537,46 @@ void RadarCoreTest::automaticallyCentersOnRadarOnlyOnce() {
     QVERIFY(map_state.locateRadar());
     QCOMPARE(map_state.center().longitude, 110.42);
     QCOMPARE(map_state.center().latitude, 25.32);
+}
+
+void RadarCoreTest::convertsWebMercatorCoordinates() {
+    const utms::GeoPosition position{25.311724, 110.416819};
+
+    const QPointF pixel = utms::WebMercator::geoToGlobalPixel(position, 17);
+    const utms::GeoPosition restored = utms::WebMercator::globalPixelToGeo(pixel, 17);
+
+    QVERIFY(std::abs(restored.latitude - position.latitude) < 1e-9);
+    QVERIFY(std::abs(restored.longitude - position.longitude) < 1e-9);
+    QCOMPARE(utms::WebMercator::worldSizePx(17), 33'554'432.0);
+}
+
+void RadarCoreTest::clampsWebMercatorLatitude() {
+    const QPointF north_pixel = utms::WebMercator::geoToGlobalPixel({90.0, 0.0}, 15);
+    const QPointF south_pixel = utms::WebMercator::geoToGlobalPixel({-90.0, 0.0}, 15);
+
+    QVERIFY(north_pixel.y() >= 0.0);
+    QVERIFY(south_pixel.y() <= utms::WebMercator::worldSizePx(15));
+    QVERIFY(std::abs(utms::WebMercator::globalPixelToGeo(north_pixel, 15).latitude -
+                     utms::WebMercator::kMaximumLatitude) < 1e-8);
+}
+
+void RadarCoreTest::preservesAndClearsSharedMapSelection() {
+    utms::OnlineMapState map_state;
+    utms::RadarFrame frame;
+    frame.tracks = {makeTrack(7), makeTrack(8)};
+    map_state.replaceFrame(frame);
+
+    QVERIFY(map_state.setSelectedTrackId(7));
+    QCOMPARE(map_state.selectedTrackId(), std::optional<qint64>(7));
+    map_state.setCenter({25.32, 110.42});
+    map_state.setZoom(25);
+    QCOMPARE(map_state.zoom(), 19);
+
+    frame.tracks = {makeTrack(8)};
+    map_state.replaceFrame(frame);
+    QVERIFY(!map_state.selectedTrackId().has_value());
+    QVERIFY(!map_state.setSelectedTrackId(99));
+    QCOMPARE(map_state.center().longitude, 110.42);
 }
 
 QTEST_MAIN(RadarCoreTest)

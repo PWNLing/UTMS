@@ -73,6 +73,10 @@ OnlineMapUpdate OnlineMapState::replaceFrame(const RadarFrame &frame)
 
     current_frame_ = frame;
     targets_by_id_ = std::move(next_targets);
+    if (selected_track_id_.has_value() && !targets_by_id_.contains(selected_track_id_.value()))
+    {
+        selected_track_id_.reset();
+    }
     return update;
 }
 
@@ -112,6 +116,11 @@ std::optional<GeoPosition> OnlineMapState::radarPosition() const
     return radar_position_;
 }
 
+std::optional<qint64> OnlineMapState::selectedTrackId() const
+{
+    return selected_track_id_;
+}
+
 void OnlineMapState::setCenter(const GeoPosition &center)
 {
     center_ = center;
@@ -127,6 +136,16 @@ void OnlineMapState::setLayer(OnlineMapLayer layer)
     layer_ = layer;
 }
 
+bool OnlineMapState::setSelectedTrackId(std::optional<qint64> track_id)
+{
+    if (track_id.has_value() && !targets_by_id_.contains(track_id.value()))
+    {
+        return false;
+    }
+    selected_track_id_ = track_id;
+    return true;
+}
+
 bool OnlineMapState::locateRadar()
 {
     if (!radar_position_.has_value())
@@ -139,7 +158,7 @@ bool OnlineMapState::locateRadar()
 
 OnlineMapTarget OnlineMapState::makeMapTarget(const TrackData &track, bool content_changed)
 {
-    return {track.track_id,   track.type,          track.position,         track.velocity_mps,
+    return {track.track_id,   track.type,          track.position,          track.velocity_mps,
             track.distance_m, track.first_seen_at, targetColor(track.type), content_changed};
 }
 

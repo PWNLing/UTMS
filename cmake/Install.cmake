@@ -32,3 +32,10 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/models")
         DESTINATION "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/models"
     )
 endif()
+
+# 离线地图严格从可执行程序相对目录 data/map/amap 读取。
+if(EXISTS "${PROJECT_SOURCE_DIR}/data")
+    install(DIRECTORY "${PROJECT_SOURCE_DIR}/data/"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}/data"
+    )
+endif()

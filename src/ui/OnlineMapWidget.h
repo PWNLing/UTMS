@@ -18,30 +18,31 @@ class OnlineMapWidget : public QWidget
 {
     Q_OBJECT
 
-  public:
+    public:
     explicit OnlineMapWidget(QWidget *parent = nullptr);
 
-    void setFrame(const RadarFrame &frame);
+    void renderFrame(const OnlineMapState &state, const OnlineMapUpdate &update);
+    void setView(const GeoPosition &center, int zoom);
     void setLayer(OnlineMapLayer layer);
-    bool locateRadar();
+    void setSelectedTrackId(std::optional<qint64> track_id);
 
-  signals:
+    signals:
     void targetClicked(qint64 track_id);
+    void viewChanged(const GeoPosition &center, int zoom);
     void mapError(const QString &message);
 
-  private slots:
+    private slots:
     void handlePageReady();
     void handleMapError(const QString &message);
     void handleMapWarning(const QString &message);
-    void handleViewChanged(double longitude, double latitude, int zoom);
 
-  private:
+    private:
     QJsonObject createInitialState() const;
     static QJsonObject createUpdateObject(const OnlineMapUpdate &update);
     void handleRenderProcessTermination(int status, int exit_code);
     void showError(const QString &message);
 
-    OnlineMapState state_;
+    OnlineMapState render_state_;
     QStackedLayout *stacked_layout_ = nullptr;
     QWebEngineView *web_view_ = nullptr;
     QLabel *error_label_ = nullptr;
