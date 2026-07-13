@@ -15,6 +15,8 @@ class MapPanel;
 class BottomStatusBar;
 class StatisticsWidget;
 class TrackTableWidget;
+class RtspController;
+class VideoStreamWidget;
 class UdpReceiver;
 enum class UdpStatus;
 struct RadarFrame;
@@ -38,11 +40,14 @@ protected:
 private slots:
     void handleUdpStatusChanged(utms::UdpStatus status, const QString &detail);
     void handleUdpWorkerStopped();
+    void handleVideoWorkerStopped();
     void updateCurrentFrame(const utms::RadarFrame &frame);
 
 private:
     void setupUi();
     void setupUdpWorker();
+    void setupVideoController();
+    void completeShutdownIfReady();
 
     QSpinBox *port_spin_box_ = nullptr;
     QPushButton *start_button_ = nullptr;
@@ -57,8 +62,11 @@ private:
     QPushButton *locate_radar_button_ = nullptr;
     utms::StatisticsWidget *statistics_widget_ = nullptr;
     utms::BottomStatusBar *bottom_status_bar_ = nullptr;
+    utms::VideoStreamWidget *video_stream_widget_ = nullptr;
+    utms::RtspController *rtsp_controller_ = nullptr;
     QThread *udp_thread_ = nullptr;
     utms::UdpReceiver *udp_receiver_ = nullptr;
     bool shutdown_started_ = false;
-    bool shutdown_complete_ = false;
+    bool udp_shutdown_complete_ = false;
+    bool video_shutdown_complete_ = false;
 };

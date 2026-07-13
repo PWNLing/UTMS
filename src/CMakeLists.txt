@@ -4,6 +4,7 @@
 # 核心业务模块不依赖界面；通信模块依赖核心模块；UI 位于最上层。
 add_subdirectory(core)
 add_subdirectory(map)
+add_subdirectory(media)
 add_subdirectory(network)
 add_subdirectory(workbench)
 add_subdirectory(ui)
@@ -81,3 +82,13 @@ foreach(runtime_directory IN ITEMS config data)
         )
     endif()
 endforeach()
+
+# media 模块按需链接 FFmpeg；构建后把共享运行库放到应用旁，保证从构建目录可直接预览 RTSP。
+if(WIN32 AND EXISTS "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/bin")
+    add_custom_command(TARGET ${PROJECT_APP_TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/bin"
+            "$<TARGET_FILE_DIR:${PROJECT_APP_TARGET}>"
+        COMMENT "Copying FFmpeg runtime libraries"
+    )
+endif()

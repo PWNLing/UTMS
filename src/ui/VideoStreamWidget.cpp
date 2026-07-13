@@ -1,0 +1,122 @@
+#include "ui/VideoStreamWidget.h"
+
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPainter>
+#include <QPushButton>
+#include <QSizePolicy>
+#include <QVBoxLayout>
+
+namespace utms {
+
+class VideoFrameWidget : public QWidget {
+public:
+    explicit VideoFrameWidget(QWidget *parent = nullptr) : QWidget(parent)
+    {
+        setMinimumSize(320, 180);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    }
+
+    void setFrame(const QImage &frame)
+    {
+        frame_ = frame;
+        update();
+    }
+
+    void clearFrame()
+    {
+        if (!frame_.isNull()) {
+            frame_ = QImage();
+            update();
+        }
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        Q_UNUSED(event)
+        QPainter painter(this);
+        painter.fillRect(rect(), QColor(QStringLiteral("#20252b")));
+        if (frame_.isNull()) {
+            painter.setPen(QColor(QStringLiteral("#c7cbd1")));
+            painter.drawText(rect(), Qt::AlignCenter, tr("无视频"));
+            return;
+        }
+
+        const QSize target_size = frame_.size().scaled(size(), Qt::KeepAspectRatio);
+        const QRect target_rect(QPoint((width() - target_size.width()) / 2, (height() - target_size.height()) / 2),
+                                target_size);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.drawImage(target_rect, frame_);
+    }
+
+private:
+    QImage frame_;
+};
+
+VideoStreamWidget::VideoStreamWidget(QWidget *parent) : QWidget(parent)
+{
+    auto *main_layout = new QVBoxLayout(this);
+    auto *controls_layout = new QHBoxLayout();
+    stream_url_line_edit_ = new QLineEdit(QString::fromLatin1(kDefaultStreamUrl), this);
+    stream_url_line_edit_->setPlaceholderText(tr("请输入 RTSP 地址"));
+    connect_button_ = new QPushButton(tr("连接"), this);
+    disconnect_button_ = new QPushButton(tr("断开"), this);
+    status_label_ = new QLabel(tr("已断开"), this);
+    frame_widget_ = new VideoFrameWidget(this);
+
+    controls_layout->addWidget(new QLabel(tr("RTSP 地址"), this));
+    controls_layout->addWidget(stream_url_line_edit_, 1);
+    controls_layout->addWidget(connect_button_);
+    controls_layout->addWidget(disconnect_button_);
+    main_layout->addLayout(controls_layout);
+    main_layout->addWidget(status_label_);
+    main_layout->addWidget(frame_widget_, 1);
+
+    connect(connect_button_, &QPushButton::clicked, this,
+            [this]() { emit connectRequested(stream_url_line_edit_->text()); });
+    connect(disconnect_button_, &QPushButton::clicked, this, &VideoStreamWidget::disconnectRequested);
+    setConnectionState(RtspConnectionState::kDisconnected, tr("已断开"));
+}
+
+QString VideoStreamWidget::streamUrl() const { return stream_url_line_edit_->text(); }
+
+void VideoStreamWidget::setConnectionState(RtspConnectionState state, const QString &detail)
+{
+    const bool disconnected = state == RtspConnectionState::kDisconnected;
+    stream_url_line_edit_->setEnabled(disconnected);
+    connect_button_->setEnabled(disconnected);
+    disconnect_button_->setEnabled(!disconnected);
+
+    QString state_text;
+    QString color;
+    switch (state) {
+    case RtspConnectionState::kDisconnected:
+        state_text = tr("已断开");
+        color = QStringLiteral("#c0392b");
+        break;
+    case RtspConnectionState::kConnecting:
+        state_text = tr("连接中");
+        color = QStringLiteral("#d4a017");
+        break;
+    case RtspConnectionState::kPlaying:
+        state_text = tr("播放中");
+        color = QStringLiteral("#208a4b");
+        break;
+    case RtspConnectionState::kReconnecting:
+        state_text = tr("重连中");
+        color = QStringLiteral("#d4a017");
+        break;
+    }
+
+    status_label_->setText(detail.isEmpty() ? state_text : tr("%1：%2").arg(state_text, detail));
+    status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
+    if (state != RtspConnectionState::kPlaying) {
+        frame_widget_->clearFrame();
+    }
+}
+
+void VideoStreamWidget::setFrame(const QImage &frame) { frame_widget_->setFrame(frame); }
+
+} // namespace utms

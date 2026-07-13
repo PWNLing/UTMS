@@ -71,6 +71,14 @@ install(FILES "${PROJECT_SOURCE_DIR}/config/amap.example.json"
     DESTINATION "${CMAKE_INSTALL_BINDIR}/config"
 )
 
+if(WIN32 AND EXISTS "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/bin")
+    install(DIRECTORY "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/bin/"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        FILES_MATCHING
+            PATTERN "*.dll"
+    )
+endif()
+
 # 离线地图严格从可执行程序相对目录 data/map/amap 读取。若开发机已
 # 放置瓦片，则一并复制；未放置时仍通过说明文件创建正确的目录结构。
 if(EXISTS "${PROJECT_SOURCE_DIR}/data/map/amap")

@@ -20,6 +20,8 @@ add_library(${PROJECT_UI_TARGET} STATIC
     OnlineMapWidget.h
     StatisticsWidget.cpp
     StatisticsWidget.h
+    VideoStreamWidget.cpp
+    VideoStreamWidget.h
     mainwindow.cpp
     mainwindow.h
 )
@@ -54,6 +56,7 @@ target_link_libraries(${PROJECT_UI_TARGET}
     PUBLIC
         ${PROJECT_NAMESPACE}::network
         ${PROJECT_NAMESPACE}::map
+        ${PROJECT_NAMESPACE}::media
         ${PROJECT_NAMESPACE}::workbench
         Qt${QT_VERSION_MAJOR}::Charts
         Qt${QT_VERSION_MAJOR}::Concurrent

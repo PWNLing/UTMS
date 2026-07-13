@@ -19,19 +19,23 @@
 
 #include "core/RadarTypes.h"
 #include "map/OnlineMapState.h"
+#include "media/RtspController.h"
 #include "network/UdpReceiver.h"
 #include "ui/BottomStatusBar.h"
 #include "ui/MapPanel.h"
 #include "ui/StatisticsWidget.h"
+#include "ui/VideoStreamWidget.h"
 #include "workbench/TrackTableWidget.h"
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     qRegisterMetaType<utms::RadarFrame>();
     qRegisterMetaType<utms::UdpStatus>();
+    qRegisterMetaType<utms::RtspConnectionState>();
     setupUi();
     handleUdpStatusChanged(utms::UdpStatus::kStopped, tr("UDP 未启动"));
     setupUdpWorker();
+    setupVideoController();
 }
 
 MainWindow::~MainWindow()
@@ -45,7 +49,9 @@ MainWindow::~MainWindow()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (shutdown_complete_ || udp_thread_ == nullptr || !udp_thread_->isRunning()) {
+    const bool udp_stopped = udp_shutdown_complete_ || udp_thread_ == nullptr || !udp_thread_->isRunning();
+    const bool video_stopped = video_shutdown_complete_ || rtsp_controller_ == nullptr;
+    if (udp_stopped && video_stopped) {
         event->accept();
         return;
     }
@@ -54,7 +60,17 @@ void MainWindow::closeEvent(QCloseEvent *event)
     if (!shutdown_started_) {
         shutdown_started_ = true;
         setEnabled(false);
-        emit stopListeningRequested();
+        if (udp_thread_ != nullptr && udp_thread_->isRunning()) {
+            emit stopListeningRequested();
+        } else {
+            udp_shutdown_complete_ = true;
+        }
+        if (rtsp_controller_ != nullptr) {
+            rtsp_controller_->shutdown();
+        } else {
+            video_shutdown_complete_ = true;
+        }
+        completeShutdownIfReady();
     }
 }
 
@@ -62,6 +78,19 @@ void MainWindow::handleUdpWorkerStopped()
 {
     if (shutdown_started_ && udp_thread_ != nullptr) {
         udp_thread_->quit();
+    }
+}
+
+void MainWindow::handleVideoWorkerStopped()
+{
+    video_shutdown_complete_ = true;
+    completeShutdownIfReady();
+}
+
+void MainWindow::completeShutdownIfReady()
+{
+    if (shutdown_started_ && udp_shutdown_complete_ && video_shutdown_complete_) {
+        close();
     }
 }
 
@@ -181,15 +210,8 @@ void MainWindow::setupUi()
     statistics_widget_ = new utms::StatisticsWidget(configuration_tabs);
     configuration_tabs->addTab(statistics_widget_, tr("统计图表"));
 
-    auto *video_widget = new QWidget(configuration_tabs);
-    auto *video_layout = new QVBoxLayout(video_widget);
-    auto *video_label = new QLabel(tr("视频流与目标识别功能将在第二阶段实现"), video_widget);
-    video_label->setAlignment(Qt::AlignCenter);
-    video_label->setStyleSheet(QStringLiteral("QLabel { color: #666666; font-size: 16px; }"));
-    video_layout->addStretch();
-    video_layout->addWidget(video_label);
-    video_layout->addStretch();
-    configuration_tabs->addTab(video_widget, tr("视频流"));
+    video_stream_widget_ = new utms::VideoStreamWidget(configuration_tabs);
+    configuration_tabs->addTab(video_stream_widget_, tr("视频流"));
 
     data_splitter->addWidget(track_table_);
     data_splitter->addWidget(configuration_tabs);
@@ -265,9 +287,23 @@ void MainWindow::setupUdpWorker()
     connect(udp_receiver_, &utms::UdpReceiver::stopped, this, &MainWindow::handleUdpWorkerStopped);
     connect(udp_thread_, &QThread::finished, udp_receiver_, &QObject::deleteLater);
     connect(udp_thread_, &QThread::finished, this, [this]() {
-        shutdown_complete_ = true;
-        close();
+        udp_shutdown_complete_ = true;
+        completeShutdownIfReady();
     });
 
     udp_thread_->start();
+}
+
+void MainWindow::setupVideoController()
+{
+    rtsp_controller_ = new utms::RtspController(this);
+    connect(video_stream_widget_, &utms::VideoStreamWidget::connectRequested, rtsp_controller_,
+            &utms::RtspController::connectToStream);
+    connect(video_stream_widget_, &utms::VideoStreamWidget::disconnectRequested, rtsp_controller_,
+            &utms::RtspController::disconnectFromStream);
+    connect(rtsp_controller_, &utms::RtspController::stateChanged, video_stream_widget_,
+            &utms::VideoStreamWidget::setConnectionState);
+    connect(rtsp_controller_, &utms::RtspController::frameReady, video_stream_widget_,
+            &utms::VideoStreamWidget::setFrame);
+    connect(rtsp_controller_, &utms::RtspController::stopped, this, &MainWindow::handleVideoWorkerStopped);
 }

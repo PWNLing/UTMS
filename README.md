@@ -1,6 +1,6 @@
 # GUET-UTMS 雷达显控平台
 
-UTMS 是面向 Windows 的 Qt Widgets 雷达显控应用。第一阶段接收 UDP JSON 当前帧快照，并同步显示雷达位置、目标地图标记、航迹表格、类别统计和运行状态。产品行为以 [`docs/PRD.md`](docs/PRD.md) 为准。
+UTMS 是面向 Windows 的 Qt Widgets 雷达显控应用。第一阶段接收 UDP JSON 当前帧快照，并同步显示雷达位置、目标地图标记、航迹表格、类别统计和运行状态；第二阶段增加单路 RTSP 实时预览。产品行为以 [`docs/PRD.md`](docs/PRD.md) 和 [`docs/PRD-phase2.md`](docs/PRD-phase2.md) 为准。
 
 ## 开发环境
 
@@ -20,7 +20,7 @@ UTMS 是面向 Windows 的 Qt Widgets 雷达显控应用。第一阶段接收 UD
 - WebEngineWidgets、WebChannel；
 - Test（启用自动化测试时需要）。
 
-第一阶段不需要 FFmpeg、ONNX Runtime、YOLO 或其他视频依赖。
+RTSP 预览需要将 Windows x64 FFmpeg shared 开发包放在 `third_party/ffmpeg/`，其中至少包含 `include/`、`lib/` 和 `bin/`。CMake 只在 `media` 模块中链接 FFmpeg，并将运行时 DLL 复制到应用旁。YOLO 检测不属于 Issue #10。
 
 ## 构建与测试
 
@@ -42,7 +42,7 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-`PROJECT_BUILD_TESTS` 默认关闭；只有配置为 `ON` 时才会生成 Qt Test 目标。测试覆盖 PRD 规定的 JSON 解析与容错、坐标校验、重复目标、类型映射、可选测量值、序号策略、当前帧统计、表格排序和筛选等核心规则。
+`PROJECT_BUILD_TESTS` 默认关闭；只有配置为 `ON` 时才会生成 Qt Test 目标。测试覆盖雷达核心规则、表格排序筛选以及 RTSP 手动连接、失败、重连和手动断开的状态转换。
 
 ## 从构建目录运行
 
@@ -53,6 +53,12 @@ ctest --test-dir build -C Debug --output-on-failure
 - 绿色：最近 3 秒内收到过被接受的合法数据。
 
 程序不会自动启动 UDP 监听，也不会持久化端口、地图或窗口配置。
+
+## RTSP 实时预览
+
+应用启动后不会自动访问摄像头。在“视频流”Tab 中可编辑默认地址 `rtsp://192.168.1.101:8554/camera_1`，点击“连接”后使用 TCP RTSP 拉流；点击“断开”会停止网络访问并立即清除画面。地址只在当前运行中使用，不写入配置文件。
+
+界面区分连接中、播放中、重连中和已断开状态。连接失败或播放中断时会立即清除旧画面，并在没有人工断开的前提下每 3 秒重试。正常视频帧不会逐帧写日志；连接、断开、重连和解码错误会写入运行日志。
 
 ## 在线高德地图
 
@@ -105,7 +111,7 @@ python scripts\udp_simulator.py `
 
 ## 运行日志
 
-日志位于可执行文件旁的 `logs/utms.log`。应用记录程序生命周期、UDP 绑定、报文校验、序号拒绝或跳跃、序号基准重置、地图配置和瓦片缺失等事件，但不逐帧记录正常数据。
+日志位于可执行文件旁的 `logs/utms.log`。应用记录程序生命周期、UDP 绑定、报文校验、序号拒绝或跳跃、序号基准重置、地图配置、瓦片缺失以及 RTSP 连接、断开、重连和解码错误等事件，但不逐帧记录正常数据。
 
 单个文件最大 10 MB，最多保留当前文件及轮转文件共 5 个。提交故障信息时请保留全部 `utms*.log`。
 
@@ -134,6 +140,7 @@ dist/UTMS/
 └── bin/
     ├── UTMS.exe
     ├── Qt6*.dll、QtWebEngineProcess.exe、msvcp*.dll 和 vcruntime*.dll
+    ├── avcodec-*.dll、avformat-*.dll、avutil-*.dll、swscale-*.dll 等 FFmpeg 运行库
     ├── config/
     │   └── amap.example.json
     ├── data/map/amap/
@@ -168,10 +175,14 @@ dist/UTMS/
 
 先确认已经点击“启动监听”，模拟器 IP/端口与界面一致，且 Windows 防火墙允许 UDP。绑定失败时检查端口是否被其他程序占用；详细原因见 `bin/logs/utms.log`。
 
+### RTSP 持续显示“重连中”
+
+确认摄像头地址可从当前机器访问、服务端支持 TCP RTSP、凭据正确，并检查防火墙。再确认 FFmpeg DLL 与 `UTMS.exe` 位于同一目录；详细连接或解码错误见 `bin/logs/utms.log`。
+
 ### 数据到达但部分目标不显示
 
 目标必须包含可转换的 `track_id`、`position.latitude` 和 `position.longitude`，坐标必须在合法范围内且不能为 `(0, 0)`。单个非法目标会被跳过，原因写入运行日志。
 
-## 第一阶段范围边界
+## 范围边界
 
-应用只展示单雷达的最新当前帧快照，不保存历史点迹、不绘制轨迹线、不做多雷达融合或坐标转换，也不持久化配置。视频流 Tab 仅为第二阶段提示；第一阶段不包含 RTSP、FFmpeg、YOLO 或 ONNX Runtime。
+应用只展示单雷达的最新当前帧快照，不保存历史点迹、不绘制轨迹线、不做多雷达融合或坐标转换，也不持久化配置。当前视频能力仅包含单路 TCP RTSP 实时预览与断流恢复；YOLO 检测、雷达—视频关联、录像和多摄像头不属于 Issue #10。
