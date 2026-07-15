@@ -39,8 +39,9 @@ signals:
 
 private:
     struct ModelSession;
+    enum class InitializationFailureStage { kModelResource, kInferenceRuntime };
 
-    bool loadModel(const QString &model_directory, QString &error);
+    bool loadModel(const QString &model_directory, QString &error, InitializationFailureStage &failure_stage);
     QVector<VideoDetection> runInference(const QImage &frame, QString &error) const;
 
     std::shared_ptr<LatestVideoFrameBuffer> frame_buffer_;

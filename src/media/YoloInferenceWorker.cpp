@@ -86,8 +86,15 @@ void YoloInferenceWorker::enableDetection(quint64 request_id, const QString &mod
     }
     if (model_session_ == nullptr) {
         QString error;
-        if (!loadModel(model_directory, error)) {
-            qWarning() << "YoloInferenceWorker: failed to load YOLO26 model from" << model_directory << error;
+        InitializationFailureStage failure_stage = InitializationFailureStage::kModelResource;
+        if (!loadModel(model_directory, error, failure_stage)) {
+            if (failure_stage == InitializationFailureStage::kInferenceRuntime) {
+                qWarning() << "YoloInferenceWorker: failed to initialize YOLO26 inference from" << model_directory
+                           << error;
+            } else {
+                qWarning() << "YoloInferenceWorker: failed to load YOLO26 model resources from" << model_directory
+                           << error;
+            }
             processing_requested_.store(false, std::memory_order_release);
             emit modelError(request_id, error);
             return;
@@ -151,13 +158,16 @@ void YoloInferenceWorker::shutdown()
     emit stopped();
 }
 
-bool YoloInferenceWorker::loadModel(const QString &model_directory, QString &error)
+bool YoloInferenceWorker::loadModel(const QString &model_directory, QString &error,
+                                    InitializationFailureStage &failure_stage)
 {
+    failure_stage = InitializationFailureStage::kModelResource;
     const auto config = YoloModelConfig::read(model_directory, &error);
     if (!config.has_value()) {
         return false;
     }
 
+    failure_stage = InitializationFailureStage::kInferenceRuntime;
     try {
         auto session = std::make_unique<ModelSession>();
         session->config = *config;
@@ -193,7 +203,7 @@ bool YoloInferenceWorker::loadModel(const QString &model_directory, QString &err
         model_session_ = std::move(session);
         return true;
     } catch (const Ort::Exception &exception) {
-        error = tr("无法加载 YOLO26 ONNX 模型: %1").arg(QString::fromUtf8(exception.what()));
+        error = tr("无法初始化 YOLO26 ONNX 推理会话: %1").arg(QString::fromUtf8(exception.what()));
         return false;
     }
 }

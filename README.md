@@ -44,6 +44,14 @@ ctest --test-dir build -C Debug --output-on-failure
 
 `PROJECT_BUILD_TESTS` 默认关闭；只有配置为 `ON` 时才会生成 Qt Test 目标。测试覆盖雷达核心规则、表格排序筛选、RTSP 状态转换，以及 YOLO 模型配置、后处理、五类映射和最新帧策略。
 
+Release 配置还会生成并随绿色目录安装 `UTMS_video_performance_acceptance.exe`。该工具固定使用 640×640 YOLO26n 和 CPU Execution Provider，预热后测量预处理、推理与后处理吞吐；默认阈值为 10 FPS：
+
+```powershell
+.\dist\UTMS\bin\UTMS_video_performance_acceptance.exe --warmup 5 --iterations 100
+```
+
+性能数值依赖参考 PC，工具因此不加入日常 CTest；最终结果应记录到人工验收清单。
+
 ## 从构建目录运行
 
 启动 `UTMS.exe`，在“系统配置”页保留默认端口 `10000` 并点击“启动监听”。UDP 状态含义：
@@ -113,7 +121,7 @@ python scripts\udp_simulator.py `
 
 ## 运行日志
 
-日志位于可执行文件旁的 `logs/utms.log`。应用记录程序生命周期、UDP 绑定、报文校验、序号拒绝或跳跃、序号基准重置、地图配置、瓦片缺失以及 RTSP 连接、断开、重连和解码错误等事件，但不逐帧记录正常数据。
+日志位于可执行文件旁的 `logs/utms.log`。应用记录程序生命周期、UDP 绑定、报文校验、序号拒绝或跳跃、序号基准重置、地图配置、瓦片缺失以及 RTSP 连接、断开、重连和解码错误等事件。检测日志区分模型资源加载失败、ONNX 推理初始化失败和运行中推理失败；严重错误使用 `CRITICAL` 或 `FATAL`。正常视频帧和检测结果不会逐帧写日志。
 
 单个文件最大 10 MB，最多保留当前文件及轮转文件共 5 个。提交故障信息时请保留全部 `utms*.log`。
 
@@ -132,15 +140,19 @@ ctest --test-dir build-release --output-on-failure
 cmake --install build-release
 ```
 
+安装最后会自动检查 FFmpeg、ONNX Runtime 和 `models/yolo26/` 的关键文件；缺少任一运行资源时安装失败，不应交付该目录。
+
 安装后的关键结构：
 
 ```text
 dist/UTMS/
 ├── README.md
 ├── acceptance-checklist.md
+├── licenses/ffmpeg/、licenses/onnxruntime/
 ├── plugins/、resources/、translations/（Qt 运行资源）
 └── bin/
     ├── UTMS.exe
+    ├── UTMS_video_performance_acceptance.exe
     ├── Qt6*.dll、QtWebEngineProcess.exe、msvcp*.dll 和 vcruntime*.dll
     ├── avcodec-*.dll、avformat-*.dll、avutil-*.dll、swscale-*.dll 等 FFmpeg 运行库
     ├── onnxruntime.dll
@@ -155,7 +167,7 @@ dist/UTMS/
 
 发布前在绿色目录中按需将 `bin/config/amap.example.json` 复制为 `bin/config/amap.json` 并填写部署环境自己的 Key。不要把真实 Key 放入公开压缩包。随后在未配置 Qt 开发环境的 Windows 10/11 64 位机器上启动 `bin/UTMS.exe` 进行最终验收。
 
-人工验收步骤和两小时稳定性记录表见 [`docs/acceptance-checklist.md`](docs/acceptance-checklist.md)。
+真实 RTSP、检测开关、断流恢复、500 ms 端到端延迟和两小时稳定性无法由普通单元测试替代。完整步骤与记录表见 [`docs/acceptance-checklist.md`](docs/acceptance-checklist.md)。
 
 ## 常见问题
 

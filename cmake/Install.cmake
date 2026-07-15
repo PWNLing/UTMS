@@ -66,6 +66,14 @@ install(TARGETS ${PROJECT_APP_TARGET}
         DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+set(video_performance_acceptance_target "${PROJECT_NAME}_video_performance_acceptance")
+if(TARGET ${video_performance_acceptance_target})
+    install(TARGETS ${video_performance_acceptance_target}
+        RUNTIME
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
+
 # 只发布配置示例，避免将开发机上的真实高德 Key 带入绿色目录。
 install(FILES "${PROJECT_SOURCE_DIR}/config/amap.example.json"
     DESTINATION "${CMAKE_INSTALL_BINDIR}/config"
@@ -84,6 +92,23 @@ if(WIN32 AND EXISTS "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/lib")
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
         FILES_MATCHING
             PATTERN "*.dll"
+    )
+endif()
+
+if(EXISTS "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/LICENSE")
+    install(FILES
+        "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/LICENSE"
+        "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/README.txt"
+        DESTINATION "licenses/ffmpeg"
+    )
+endif()
+
+if(EXISTS "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/LICENSE")
+    install(FILES
+        "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/LICENSE"
+        "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/Privacy.md"
+        "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/ThirdPartyNotices.txt"
+        DESTINATION "licenses/onnxruntime"
     )
 endif()
 
@@ -132,3 +157,12 @@ if(QT_VERSION_MAJOR GREATER_EQUAL 6)
     )
     install(SCRIPT ${qt_deploy_script})
 endif()
+
+# 部署脚本执行后验证视频运行库和模型资源，避免生成能够安装但无法
+# 预览或推理的不完整绿色目录。
+install(CODE "
+    set(UTMS_RELEASE_ROOT \"\${CMAKE_INSTALL_PREFIX}\")
+    set(UTMS_RELEASE_BINDIR \"${CMAKE_INSTALL_BINDIR}\")
+    set(UTMS_RELEASE_EXECUTABLE_NAME \"${PROJECT_APP_TARGET}${CMAKE_EXECUTABLE_SUFFIX}\")
+    include(\"${PROJECT_SOURCE_DIR}/cmake/VerifyRelease.cmake\")
+")
