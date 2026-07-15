@@ -1,6 +1,6 @@
 # GUET-UTMS 雷达显控平台
 
-UTMS 是面向 Windows 的 Qt Widgets 雷达显控应用。第一阶段接收 UDP JSON 当前帧快照，并同步显示雷达位置、目标地图标记、航迹表格、类别统计和运行状态；第二阶段增加单路 RTSP 实时预览。产品行为以 [`docs/PRD.md`](docs/PRD.md) 和 [`docs/PRD-phase2.md`](docs/PRD-phase2.md) 为准。
+UTMS 是面向 Windows 的 Qt Widgets 雷达显控应用。第一阶段接收 UDP JSON 当前帧快照，并同步显示雷达位置、目标地图标记、航迹表格、类别统计和运行状态；第二阶段增加单路 RTSP 实时预览与按需 YOLO26 检测。产品行为以 [`docs/PRD.md`](docs/PRD.md) 和 [`docs/PRD-phase2.md`](docs/PRD-phase2.md) 为准。
 
 ## 开发环境
 
@@ -20,7 +20,7 @@ UTMS 是面向 Windows 的 Qt Widgets 雷达显控应用。第一阶段接收 UD
 - WebEngineWidgets、WebChannel；
 - Test（启用自动化测试时需要）。
 
-RTSP 预览需要将 Windows x64 FFmpeg shared 开发包放在 `third_party/ffmpeg/`，其中至少包含 `include/`、`lib/` 和 `bin/`。CMake 只在 `media` 模块中链接 FFmpeg，并将运行时 DLL 复制到应用旁。YOLO 检测不属于 Issue #10。
+RTSP 预览需要将 Windows x64 FFmpeg shared 开发包放在 `third_party/ffmpeg/`，其中至少包含 `include/`、`lib/` 和 `bin/`。YOLO26 检测需要 Windows x64 CPU 版 ONNX Runtime，目录为 `third_party/onnxruntime/`，并包含完整 `include/`、`lib/onnxruntime.lib` 和 `lib/onnxruntime.dll`。CMake 仅在 `media` 模块链接这些依赖，并将运行时 DLL 与 `models/yolo26/` 复制到应用旁。
 
 ## 构建与测试
 
@@ -42,7 +42,7 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-`PROJECT_BUILD_TESTS` 默认关闭；只有配置为 `ON` 时才会生成 Qt Test 目标。测试覆盖雷达核心规则、表格排序筛选以及 RTSP 手动连接、失败、重连和手动断开的状态转换。
+`PROJECT_BUILD_TESTS` 默认关闭；只有配置为 `ON` 时才会生成 Qt Test 目标。测试覆盖雷达核心规则、表格排序筛选、RTSP 状态转换，以及 YOLO 模型配置、后处理、五类映射和最新帧策略。
 
 ## 从构建目录运行
 
@@ -57,6 +57,8 @@ ctest --test-dir build -C Debug --output-on-failure
 ## RTSP 实时预览
 
 应用启动后不会自动访问摄像头。在“视频流”Tab 中可编辑默认地址 `rtsp://192.168.1.101:8554/camera_1`，点击“连接”后使用 TCP RTSP 拉流；点击“断开”会停止网络访问并立即清除画面。地址只在当前运行中使用，不写入配置文件。
+
+连接成功后检测默认关闭。点击“开启检测”时才加载 `models/yolo26/yolo26n.onnx`；视频画面叠加中文类别、置信度和检测框。关闭检测会继续预览并清除检测框，模型保留到手动断开或退出；短暂断流重连后恢复原检测开关。模型加载或推理失败只关闭检测并显示错误，不中断 RTSP 预览。
 
 界面区分连接中、播放中、重连中和已断开状态。连接失败或播放中断时会立即清除旧画面，并在没有人工断开的前提下每 3 秒重试。正常视频帧不会逐帧写日志；连接、断开、重连和解码错误会写入运行日志。
 
@@ -141,6 +143,8 @@ dist/UTMS/
     ├── UTMS.exe
     ├── Qt6*.dll、QtWebEngineProcess.exe、msvcp*.dll 和 vcruntime*.dll
     ├── avcodec-*.dll、avformat-*.dll、avutil-*.dll、swscale-*.dll 等 FFmpeg 运行库
+    ├── onnxruntime.dll
+    ├── models/yolo26/yolo26n.onnx、classes.txt、model.json
     ├── config/
     │   └── amap.example.json
     ├── data/map/amap/
@@ -185,4 +189,4 @@ dist/UTMS/
 
 ## 范围边界
 
-应用只展示单雷达的最新当前帧快照，不保存历史点迹、不绘制轨迹线、不做多雷达融合或坐标转换，也不持久化配置。当前视频能力仅包含单路 TCP RTSP 实时预览与断流恢复；YOLO 检测、雷达—视频关联、录像和多摄像头不属于 Issue #10。
+应用只展示单雷达的最新当前帧快照，不保存历史点迹、不绘制轨迹线、不做多雷达融合或坐标转换，也不持久化配置。当前视频能力包含单路 TCP RTSP 实时预览、断流恢复和按需 YOLO26 检测；雷达—视频关联、录像和多摄像头仍不在本阶段范围内。

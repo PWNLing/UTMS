@@ -72,7 +72,7 @@ endif()
 # =========================================================
 # 构建完成后，将 config/ 和 data/ 复制到可执行程序旁边，方便直接
 # 从 Qt Creator 或命令行运行程序。
-foreach(runtime_directory IN ITEMS config data)
+foreach(runtime_directory IN ITEMS config data models)
     if(EXISTS "${PROJECT_SOURCE_DIR}/${runtime_directory}")
         add_custom_command(TARGET ${PROJECT_APP_TARGET} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -90,5 +90,19 @@ if(WIN32 AND EXISTS "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/bin")
             "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/bin"
             "$<TARGET_FILE_DIR:${PROJECT_APP_TARGET}>"
         COMMENT "Copying FFmpeg runtime libraries"
+    )
+endif()
+
+# inference 模块按需链接 ONNX Runtime；CPU 运行库与模型资源必须位于应用相对目录。
+file(GLOB ONNXRUNTIME_RUNTIME_LIBRARIES
+    LIST_DIRECTORIES FALSE
+    "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/lib/*.dll"
+)
+if(WIN32 AND ONNXRUNTIME_RUNTIME_LIBRARIES)
+    add_custom_command(TARGET ${PROJECT_APP_TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${ONNXRUNTIME_RUNTIME_LIBRARIES}
+            "$<TARGET_FILE_DIR:${PROJECT_APP_TARGET}>"
+        COMMENT "Copying ONNX Runtime libraries"
     )
 endif()

@@ -6,6 +6,7 @@
 #include <QUrl>
 
 #include "media/RtspDecoderWorker.h"
+#include "media/VideoInferenceController.h"
 
 namespace utms {
 namespace {
@@ -25,7 +26,8 @@ QString safeStreamDescription(const QString &stream_url)
 
 RtspController::RtspController(QObject *parent)
     : QObject(parent), state_machine_(new RtspStateMachine(this)), reconnect_timer_(new QTimer(this)),
-      decoder_thread_(new QThread(this)), decoder_worker_(new RtspDecoderWorker())
+      decoder_thread_(new QThread(this)), decoder_worker_(new RtspDecoderWorker()),
+      inference_controller_(new VideoInferenceController(this))
 {
     reconnect_timer_->setSingleShot(true);
 
@@ -51,7 +53,11 @@ RtspController::RtspController(QObject *parent)
             Qt::BlockingQueuedConnection);
     connect(decoder_worker_, &RtspDecoderWorker::decodingFinished, this, &RtspController::handleDecodingFinished);
     connect(decoder_thread_, &QThread::finished, decoder_worker_, &QObject::deleteLater);
-    connect(decoder_thread_, &QThread::finished, this, &RtspController::stopped);
+    connect(decoder_thread_, &QThread::finished, this, &RtspController::handleDecoderThreadStopped);
+    connect(inference_controller_, &VideoInferenceController::frameReady, this, &RtspController::frameReady);
+    connect(inference_controller_, &VideoInferenceController::detectionStateChanged, this,
+            &RtspController::detectionStateChanged);
+    connect(inference_controller_, &VideoInferenceController::stopped, this, &RtspController::handleInferenceStopped);
 
     decoder_thread_->start();
 }
@@ -79,6 +85,9 @@ void RtspController::connectToStream(const QString &stream_url)
     if (shutdown_started_ || decoder_worker_ == nullptr) {
         return;
     }
+    if (!state_machine_->isConnectionDesired() && inference_controller_ != nullptr) {
+        inference_controller_->releaseModel();
+    }
     const quint64 previous_generation = session_generation_;
     ++session_generation_;
     if (!state_machine_->requestConnect(stream_url)) {
@@ -97,7 +106,17 @@ void RtspController::disconnectFromStream()
                 << "last attempt" << next_attempt_id_;
     }
     ++session_generation_;
+    if (inference_controller_ != nullptr) {
+        inference_controller_->releaseModel();
+    }
     state_machine_->requestDisconnect();
+}
+
+void RtspController::setDetectionEnabled(bool enabled)
+{
+    if (!shutdown_started_ && inference_controller_ != nullptr) {
+        inference_controller_->setDetectionEnabled(enabled);
+    }
 }
 
 void RtspController::shutdown()
@@ -111,12 +130,18 @@ void RtspController::shutdown()
     pending_stream_url_.clear();
     pending_attempt_valid_ = false;
     ++session_generation_;
+    if (inference_controller_ != nullptr) {
+        inference_controller_->shutdown();
+    } else {
+        inference_shutdown_complete_ = true;
+    }
     state_machine_->requestDisconnect();
     if (!decoder_thread_->isRunning()) {
-        emit stopped();
+        decoder_shutdown_complete_ = true;
     } else if (!decoder_busy_) {
         decoder_thread_->quit();
     }
+    completeShutdownIfReady();
 }
 
 void RtspController::startConnectionAttempt(const QString &stream_url)
@@ -173,6 +198,9 @@ void RtspController::handleConnectionFailure(quint64 attempt_id, const QString &
     }
     qWarning() << "RtspController: video connection failed" << safeStreamDescription(state_machine_->streamUrl())
                << "attempt" << attempt_id << detail;
+    if (inference_controller_ != nullptr) {
+        inference_controller_->clearPendingFrames();
+    }
     state_machine_->reportConnectionFailure(detail);
 }
 
@@ -183,13 +211,18 @@ void RtspController::handlePlaybackInterrupted(quint64 attempt_id, const QString
     }
     qWarning() << "RtspController: video playback interrupted" << safeStreamDescription(state_machine_->streamUrl())
                << "attempt" << attempt_id << detail;
+    if (inference_controller_ != nullptr) {
+        inference_controller_->clearPendingFrames();
+    }
     state_machine_->reportPlaybackInterrupted(detail);
 }
 
 void RtspController::handleDecodedFrame(quint64 attempt_id, const QImage &frame)
 {
     if (isCurrentAttempt(attempt_id) && state_machine_->state() == RtspConnectionState::kPlaying) {
-        emit frameReady(frame);
+        if (inference_controller_ != nullptr) {
+            inference_controller_->submitFrame(frame);
+        }
     }
 }
 
@@ -225,6 +258,26 @@ void RtspController::stopDecoder()
     reconnect_timer_->stop();
     if (decoder_worker_ != nullptr) {
         decoder_worker_->requestStop();
+    }
+}
+
+void RtspController::handleDecoderThreadStopped()
+{
+    decoder_shutdown_complete_ = true;
+    completeShutdownIfReady();
+}
+
+void RtspController::handleInferenceStopped()
+{
+    inference_shutdown_complete_ = true;
+    completeShutdownIfReady();
+}
+
+void RtspController::completeShutdownIfReady()
+{
+    if (shutdown_started_ && decoder_shutdown_complete_ && inference_shutdown_complete_ && !stopped_emitted_) {
+        stopped_emitted_ = true;
+        emit stopped();
     }
 }
 

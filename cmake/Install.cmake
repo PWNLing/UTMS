@@ -79,6 +79,22 @@ if(WIN32 AND EXISTS "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/bin")
     )
 endif()
 
+if(WIN32 AND EXISTS "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/lib")
+    install(DIRECTORY "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/lib/"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        FILES_MATCHING
+            PATTERN "*.dll"
+    )
+endif()
+
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/models/yolo26/"
+    DESTINATION "${CMAKE_INSTALL_BINDIR}/models/yolo26"
+    FILES_MATCHING
+        PATTERN "*.onnx"
+        PATTERN "*.txt"
+        PATTERN "*.json"
+)
+
 # 离线地图严格从可执行程序相对目录 data/map/amap 读取。若开发机已
 # 放置瓦片，则一并复制；未放置时仍通过说明文件创建正确的目录结构。
 if(EXISTS "${PROJECT_SOURCE_DIR}/data/map/amap")

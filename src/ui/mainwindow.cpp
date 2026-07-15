@@ -301,8 +301,12 @@ void MainWindow::setupVideoController()
             &utms::RtspController::connectToStream);
     connect(video_stream_widget_, &utms::VideoStreamWidget::disconnectRequested, rtsp_controller_,
             &utms::RtspController::disconnectFromStream);
+    connect(video_stream_widget_, &utms::VideoStreamWidget::detectionEnabledRequested, rtsp_controller_,
+            &utms::RtspController::setDetectionEnabled);
     connect(rtsp_controller_, &utms::RtspController::stateChanged, video_stream_widget_,
             &utms::VideoStreamWidget::setConnectionState);
+    connect(rtsp_controller_, &utms::RtspController::detectionStateChanged, video_stream_widget_,
+            &utms::VideoStreamWidget::setDetectionState);
     connect(rtsp_controller_, &utms::RtspController::frameReady, video_stream_widget_,
             &utms::VideoStreamWidget::setFrame);
     connect(rtsp_controller_, &utms::RtspController::stopped, this, &MainWindow::handleVideoWorkerStopped);

@@ -57,7 +57,8 @@ def main() -> None:
         "confidence_threshold": 0.25,
         "nms_threshold": 0.45,
         "letterbox": True,
-        "swap_rb": True,
+        # FFmpeg 已把解码画面转换为 RGB888，送入 Ultralytics 模型时不再交换 R/B。
+        "swap_rb": False,
         "normalize": True,
         "normalize_scale": 1.0 / 255.0,
     }

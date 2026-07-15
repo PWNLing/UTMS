@@ -8,7 +8,7 @@
     "confidence_threshold": 0.25,
     "nms_threshold": 0.45,
     "letterbox": true,
-    "swap_rb": true,
+    "swap_rb": false,
     "normalize": true,
     "normalize_scale": 0.00392156862745098
 }

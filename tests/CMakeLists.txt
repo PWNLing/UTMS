@@ -85,13 +85,68 @@ add_test(
     COMMAND ${PROJECT_RTSP_STATE_TEST_TARGET}
 )
 
+set(PROJECT_VIDEO_INFERENCE_TEST_TARGET "${PROJECT_NAME}_video_inference_tests")
+
+add_executable(${PROJECT_VIDEO_INFERENCE_TEST_TARGET}
+    test_video_inference.cpp
+)
+
+target_link_libraries(${PROJECT_VIDEO_INFERENCE_TEST_TARGET}
+    PRIVATE
+        ${PROJECT_NAMESPACE}::video_inference
+        Qt${QT_VERSION_MAJOR}::Gui
+        Qt${QT_VERSION_MAJOR}::Test
+)
+
+project_apply_compiler_options(${PROJECT_VIDEO_INFERENCE_TEST_TARGET})
+
+add_test(
+    NAME ${PROJECT_VIDEO_INFERENCE_TEST_TARGET}
+    COMMAND ${PROJECT_VIDEO_INFERENCE_TEST_TARGET}
+)
+
+set(PROJECT_YOLO_RUNTIME_TEST_TARGET "${PROJECT_NAME}_yolo_runtime_tests")
+
+add_executable(${PROJECT_YOLO_RUNTIME_TEST_TARGET}
+    test_yolo_runtime.cpp
+)
+
+target_compile_definitions(${PROJECT_YOLO_RUNTIME_TEST_TARGET}
+    PRIVATE
+        UTMS_TEST_MODEL_DIRECTORY="${PROJECT_SOURCE_DIR}/models/yolo26"
+)
+
+target_link_libraries(${PROJECT_YOLO_RUNTIME_TEST_TARGET}
+    PRIVATE
+        ${PROJECT_NAMESPACE}::media
+        Qt${QT_VERSION_MAJOR}::Test
+)
+
+project_apply_compiler_options(${PROJECT_YOLO_RUNTIME_TEST_TARGET})
+
+if(WIN32)
+    add_custom_command(TARGET ${PROJECT_YOLO_RUNTIME_TEST_TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/lib/onnxruntime.dll"
+            "$<TARGET_FILE_DIR:${PROJECT_YOLO_RUNTIME_TEST_TARGET}>"
+        COMMENT "Copying ONNX Runtime next to the runtime test"
+    )
+endif()
+
+add_test(
+    NAME ${PROJECT_YOLO_RUNTIME_TEST_TARGET}
+    COMMAND ${PROJECT_YOLO_RUNTIME_TEST_TARGET}
+)
+
 if(WIN32)
     set_tests_properties(
         ${PROJECT_TEST_TARGET}
         ${PROJECT_MAP_INTERACTION_TEST_TARGET}
         ${PROJECT_RTSP_STATE_TEST_TARGET}
         ${PROJECT_TRACK_WORKBENCH_TEST_TARGET}
+        ${PROJECT_VIDEO_INFERENCE_TEST_TARGET}
+        ${PROJECT_YOLO_RUNTIME_TEST_TARGET}
         PROPERTIES
-        ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>\;$ENV{PATH}"
+        ENVIRONMENT "PATH=$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>\;${PROJECT_SOURCE_DIR}/third_party/ffmpeg/bin\;${PROJECT_SOURCE_DIR}/third_party/onnxruntime/lib\;$ENV{PATH}"
     )
 endif()
