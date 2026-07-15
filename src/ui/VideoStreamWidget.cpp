@@ -13,10 +13,26 @@
 #include <QVBoxLayout>
 
 namespace utms {
+namespace {
+
+QString formatRecordingDuration(qint64 duration_seconds)
+{
+    const qint64 safe_duration_seconds = std::max<qint64>(0, duration_seconds);
+    const qint64 hours = safe_duration_seconds / 3'600;
+    const qint64 minutes = (safe_duration_seconds % 3'600) / 60;
+    const qint64 seconds = safe_duration_seconds % 60;
+    return QStringLiteral("%1:%2:%3")
+        .arg(hours, 2, 10, QLatin1Char('0'))
+        .arg(minutes, 2, 10, QLatin1Char('0'))
+        .arg(seconds, 2, 10, QLatin1Char('0'));
+}
+
+} // namespace
 
 class VideoFrameWidget : public QWidget {
 public:
-    explicit VideoFrameWidget(QWidget *parent = nullptr) : QWidget(parent)
+    explicit VideoFrameWidget(QWidget *parent = nullptr)
+        : QWidget(parent)
     {
         setMinimumSize(320, 180);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -85,7 +101,8 @@ protected:
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(box);
 
-            const QString label = tr("%1 %2%").arg(videoDetectionCategoryText(detection.category))
+            const QString label = tr("%1 %2%")
+                                      .arg(videoDetectionCategoryText(detection.category))
                                       .arg(detection.confidence * 100.0F, 0, 'f', 1);
             const QFontMetrics metrics(painter.font());
             const QRect text_rect = metrics.boundingRect(label).adjusted(-4, -2, 4, 2);
@@ -104,7 +121,8 @@ private:
     QVector<VideoDetection> detections_;
 };
 
-VideoStreamWidget::VideoStreamWidget(QWidget *parent) : QWidget(parent)
+VideoStreamWidget::VideoStreamWidget(QWidget *parent)
+    : QWidget(parent)
 {
     auto *main_layout = new QVBoxLayout(this);
     auto *controls_layout = new QHBoxLayout();
@@ -113,8 +131,12 @@ VideoStreamWidget::VideoStreamWidget(QWidget *parent) : QWidget(parent)
     connect_button_ = new QPushButton(tr("连接"), this);
     disconnect_button_ = new QPushButton(tr("断开"), this);
     detection_button_ = new QPushButton(tr("开启检测"), this);
+    recording_button_ = new QPushButton(tr("开始录制"), this);
+    open_recording_directory_button_ = new QPushButton(tr("打开录制目录"), this);
     status_label_ = new QLabel(tr("已断开"), this);
     detection_status_label_ = new QLabel(tr("检测已关闭"), this);
+    recording_status_label_ = new QLabel(tr("未录制"), this);
+    recording_duration_label_ = new QLabel(tr("录像时长：00:00:00"), this);
     frame_widget_ = new VideoFrameWidget(this);
 
     controls_layout->addWidget(new QLabel(tr("RTSP 地址"), this));
@@ -122,9 +144,15 @@ VideoStreamWidget::VideoStreamWidget(QWidget *parent) : QWidget(parent)
     controls_layout->addWidget(connect_button_);
     controls_layout->addWidget(disconnect_button_);
     controls_layout->addWidget(detection_button_);
+    controls_layout->addWidget(recording_button_);
+    controls_layout->addWidget(open_recording_directory_button_);
     main_layout->addLayout(controls_layout);
     main_layout->addWidget(status_label_);
     main_layout->addWidget(detection_status_label_);
+    auto *recording_status_layout = new QHBoxLayout();
+    recording_status_layout->addWidget(recording_status_label_, 1);
+    recording_status_layout->addWidget(recording_duration_label_);
+    main_layout->addLayout(recording_status_layout);
     main_layout->addWidget(frame_widget_, 1);
 
     connect(connect_button_, &QPushButton::clicked, this,
@@ -132,8 +160,18 @@ VideoStreamWidget::VideoStreamWidget(QWidget *parent) : QWidget(parent)
     connect(disconnect_button_, &QPushButton::clicked, this, &VideoStreamWidget::disconnectRequested);
     connect(detection_button_, &QPushButton::clicked, this,
             [this]() { emit detectionEnabledRequested(!detection_active_); });
+    connect(recording_button_, &QPushButton::clicked, this, [this]() {
+        if (recording_state_ == VideoRecordingState::kStarting || recording_state_ == VideoRecordingState::kRecording) {
+            emit stopRecordingRequested();
+        } else {
+            emit startRecordingRequested();
+        }
+    });
+    connect(open_recording_directory_button_, &QPushButton::clicked, this,
+            &VideoStreamWidget::openRecordingDirectoryRequested);
     setConnectionState(RtspConnectionState::kDisconnected, tr("已断开"));
     setDetectionState(VideoDetectionState::kDisabled, {});
+    setRecordingState(VideoRecordingState::kIdle, {}, {});
 }
 
 QString VideoStreamWidget::streamUrl() const { return stream_url_line_edit_->text(); }
@@ -173,6 +211,7 @@ void VideoStreamWidget::setConnectionState(RtspConnectionState state, const QStr
         frame_widget_->clearFrame();
     }
     detection_button_->setEnabled(video_playing_ && !detection_loading_);
+    updateRecordingControls();
 }
 
 void VideoStreamWidget::setDetectionState(VideoDetectionState state, const QString &detail)
@@ -206,6 +245,54 @@ void VideoStreamWidget::setDetectionState(VideoDetectionState state, const QStri
     detection_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
     detection_button_->setText(detection_active_ ? tr("关闭检测") : tr("开启检测"));
     detection_button_->setEnabled(video_playing_ && !detection_loading_);
+}
+
+void VideoStreamWidget::setRecordingState(VideoRecordingState state, const QString &detail, const QString &output_path)
+{
+    recording_state_ = state;
+    QString state_text;
+    QString color;
+    switch (state) {
+    case VideoRecordingState::kIdle:
+        state_text = detail.isEmpty() ? tr("未录制") : detail;
+        color = detail.isEmpty() ? QStringLiteral("#70757a") : QStringLiteral("#208a4b");
+        break;
+    case VideoRecordingState::kStarting:
+        state_text = tr("准备录制");
+        color = QStringLiteral("#d4a017");
+        setRecordingDuration(0);
+        break;
+    case VideoRecordingState::kRecording:
+        state_text = tr("录制中");
+        color = QStringLiteral("#c0392b");
+        break;
+    case VideoRecordingState::kStopping:
+        state_text = tr("正在停止");
+        color = QStringLiteral("#d4a017");
+        break;
+    case VideoRecordingState::kError:
+        state_text = detail.isEmpty() ? tr("录制失败") : tr("录制失败：%1").arg(detail);
+        color = QStringLiteral("#c0392b");
+        break;
+    }
+
+    recording_status_label_->setText(state_text);
+    recording_status_label_->setToolTip(output_path);
+    recording_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
+    updateRecordingControls();
+}
+
+void VideoStreamWidget::setRecordingDuration(qint64 duration_seconds)
+{
+    recording_duration_label_->setText(tr("录像时长：%1").arg(formatRecordingDuration(duration_seconds)));
+}
+
+void VideoStreamWidget::updateRecordingControls()
+{
+    const bool can_stop =
+        recording_state_ == VideoRecordingState::kStarting || recording_state_ == VideoRecordingState::kRecording;
+    recording_button_->setText(can_stop ? tr("停止录制") : tr("开始录制"));
+    recording_button_->setEnabled(can_stop || (video_playing_ && recording_state_ != VideoRecordingState::kStopping));
 }
 
 void VideoStreamWidget::setFrame(const QImage &frame, const QVector<VideoDetection> &detections)

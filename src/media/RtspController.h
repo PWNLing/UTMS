@@ -7,6 +7,7 @@
 #include "media/RtspStateMachine.h"
 #include "media/VideoDetection.h"
 #include "media/VideoInferenceController.h"
+#include "media/VideoRecordingSession.h"
 
 class QThread;
 class QTimer;
@@ -23,17 +24,23 @@ public:
     ~RtspController() override;
 
     RtspConnectionState state() const;
+    VideoRecordingState recordingState() const;
 
 public slots:
     void connectToStream(const QString &stream_url);
     void disconnectFromStream();
     void setDetectionEnabled(bool enabled);
+    void startRecording();
+    void stopRecording();
+    void openRecordingDirectory();
     void shutdown();
 
 signals:
     void stateChanged(utms::RtspConnectionState state, const QString &detail);
     void frameReady(const QImage &frame, const QVector<utms::VideoDetection> &detections);
     void detectionStateChanged(utms::VideoDetectionState state, const QString &detail);
+    void recordingStateChanged(utms::VideoRecordingState state, const QString &detail, const QString &output_path);
+    void recordingDurationChanged(qint64 duration_seconds);
     void decodeRequested(quint64 attempt_id, const QString &stream_url);
     void stopped();
 
@@ -45,11 +52,15 @@ private slots:
     void handlePlaybackInterrupted(quint64 attempt_id, const QString &detail);
     void handleDecodedFrame(quint64 attempt_id, const QImage &frame);
     void handleDecodingFinished(quint64 attempt_id);
+    void handleRecordingStateChanged(utms::VideoRecordingState state, const QString &detail,
+                                     const QString &output_path);
     void handleDecoderThreadStopped();
     void handleInferenceStopped();
 
 private:
     bool isCurrentAttempt(quint64 attempt_id) const;
+    QString recordingDirectory() const;
+    void requestRecordingStop(const QString &reason);
     void stopDecoder();
     void completeShutdownIfReady();
 
@@ -70,6 +81,7 @@ private:
     bool decoder_shutdown_complete_ = false;
     bool inference_shutdown_complete_ = false;
     bool stopped_emitted_ = false;
+    VideoRecordingState recording_state_ = VideoRecordingState::kIdle;
 };
 
 } // namespace utms

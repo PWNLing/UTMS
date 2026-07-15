@@ -1,6 +1,9 @@
 #include "media/RtspController.h"
 
+#include <QCoreApplication>
 #include <QDebug>
+#include <QDesktopServices>
+#include <QDir>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -25,14 +28,19 @@ QString safeStreamDescription(const QString &stream_url)
 } // namespace
 
 RtspController::RtspController(QObject *parent)
-    : QObject(parent), state_machine_(new RtspStateMachine(this)), reconnect_timer_(new QTimer(this)),
-      decoder_thread_(new QThread(this)), decoder_worker_(new RtspDecoderWorker()),
-      inference_controller_(new VideoInferenceController(this))
+    : QObject(parent)
+    , state_machine_(new RtspStateMachine(this))
+    , reconnect_timer_(new QTimer(this))
+    , decoder_thread_(new QThread(this))
+    , decoder_worker_(new RtspDecoderWorker())
+    , inference_controller_(new VideoInferenceController(this))
 {
+    qRegisterMetaType<utms::VideoRecordingState>();
     reconnect_timer_->setSingleShot(true);
 
     if (!decoder_worker_->moveToThread(decoder_thread_)) {
-        qCritical() << "RtspController: failed to move decoder worker to its dedicated thread";
+        qCritical() << "RtspController: failed to move decoder worker to its "
+                       "dedicated thread";
         delete decoder_worker_;
         decoder_worker_ = nullptr;
         return;
@@ -52,6 +60,10 @@ RtspController::RtspController(QObject *parent)
     connect(decoder_worker_, &RtspDecoderWorker::frameDecoded, this, &RtspController::handleDecodedFrame,
             Qt::BlockingQueuedConnection);
     connect(decoder_worker_, &RtspDecoderWorker::decodingFinished, this, &RtspController::handleDecodingFinished);
+    connect(decoder_worker_, &RtspDecoderWorker::recordingStateChanged, this,
+            &RtspController::handleRecordingStateChanged);
+    connect(decoder_worker_, &RtspDecoderWorker::recordingDurationChanged, this,
+            &RtspController::recordingDurationChanged);
     connect(decoder_thread_, &QThread::finished, decoder_worker_, &QObject::deleteLater);
     connect(decoder_thread_, &QThread::finished, this, &RtspController::handleDecoderThreadStopped);
     connect(inference_controller_, &VideoInferenceController::frameReady, this, &RtspController::frameReady);
@@ -65,7 +77,8 @@ RtspController::RtspController(QObject *parent)
 RtspController::~RtspController()
 {
     if (decoder_thread_ != nullptr && decoder_thread_->isRunning()) {
-        qCritical() << "RtspController: destroyed before asynchronous decoder shutdown completed";
+        qCritical() << "RtspController: destroyed before asynchronous decoder "
+                       "shutdown completed";
         if (decoder_busy_) {
             connect(decoder_worker_, &RtspDecoderWorker::decodingFinished, decoder_thread_, &QThread::quit,
                     Qt::DirectConnection);
@@ -79,6 +92,8 @@ RtspController::~RtspController()
 }
 
 RtspConnectionState RtspController::state() const { return state_machine_->state(); }
+
+VideoRecordingState RtspController::recordingState() const { return recording_state_; }
 
 void RtspController::connectToStream(const QString &stream_url)
 {
@@ -97,6 +112,7 @@ void RtspController::connectToStream(const QString &stream_url)
 
 void RtspController::disconnectFromStream()
 {
+    requestRecordingStop(tr("用户主动断开 RTSP"));
     reconnect_timer_->stop();
     pending_stream_url_.clear();
     pending_attempt_valid_ = false;
@@ -119,6 +135,42 @@ void RtspController::setDetectionEnabled(bool enabled)
     }
 }
 
+void RtspController::startRecording()
+{
+    if (shutdown_started_ || decoder_worker_ == nullptr || !decoder_busy_ ||
+        state_machine_->state() != RtspConnectionState::kPlaying ||
+        (recording_state_ != VideoRecordingState::kIdle && recording_state_ != VideoRecordingState::kError)) {
+        return;
+    }
+
+    recording_state_ = VideoRecordingState::kStarting;
+    qInfo() << "RtspController: operator requested recording for attempt" << running_attempt_id_;
+    emit recordingStateChanged(recording_state_, tr("准备录制"), {});
+    decoder_worker_->requestStartRecording(running_attempt_id_, recordingDirectory());
+}
+
+void RtspController::stopRecording()
+{
+    if (recording_state_ != VideoRecordingState::kStarting && recording_state_ != VideoRecordingState::kRecording) {
+        return;
+    }
+    qInfo() << "RtspController: operator requested recording stop for attempt" << running_attempt_id_;
+    requestRecordingStop(tr("用户停止录像"));
+}
+
+void RtspController::openRecordingDirectory()
+{
+    const QString directory_path = recordingDirectory();
+    QDir directory(directory_path);
+    if ((!directory.exists() && !directory.mkpath(QStringLiteral("."))) || !directory.exists()) {
+        qWarning() << "RtspController: failed to create recording directory" << directory_path;
+        return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(directory.absolutePath()))) {
+        qWarning() << "RtspController: failed to open recording directory" << directory.absolutePath();
+    }
+}
+
 void RtspController::shutdown()
 {
     if (shutdown_started_) {
@@ -126,6 +178,7 @@ void RtspController::shutdown()
     }
 
     shutdown_started_ = true;
+    requestRecordingStop(tr("应用退出"));
     reconnect_timer_->stop();
     pending_stream_url_.clear();
     pending_attempt_valid_ = false;
@@ -248,14 +301,39 @@ void RtspController::handleDecodingFinished(quint64 attempt_id)
     }
 }
 
+void RtspController::handleRecordingStateChanged(VideoRecordingState state, const QString &detail,
+                                                 const QString &output_path)
+{
+    recording_state_ = state;
+    emit recordingStateChanged(state, detail, output_path);
+}
+
 bool RtspController::isCurrentAttempt(quint64 attempt_id) const
 {
     return decoder_busy_ && attempt_id == running_attempt_id_ && running_session_generation_ == session_generation_;
 }
 
+QString RtspController::recordingDirectory() const
+{
+    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("recordings"));
+}
+
+void RtspController::requestRecordingStop(const QString &reason)
+{
+    if (recording_state_ != VideoRecordingState::kStarting && recording_state_ != VideoRecordingState::kRecording) {
+        return;
+    }
+    recording_state_ = VideoRecordingState::kStopping;
+    emit recordingStateChanged(recording_state_, tr("正在停止"), {});
+    if (decoder_worker_ != nullptr) {
+        decoder_worker_->requestStopRecording(reason);
+    }
+}
+
 void RtspController::stopDecoder()
 {
     reconnect_timer_->stop();
+    requestRecordingStop(tr("RTSP 连接停止"));
     if (decoder_worker_ != nullptr) {
         decoder_worker_->requestStop();
     }

@@ -5,6 +5,10 @@ set(PROJECT_VIDEO_INFERENCE_TARGET "${PROJECT_NAME}_video_inference")
 add_library(${PROJECT_MEDIA_STATE_TARGET} STATIC
     RtspStateMachine.cpp
     RtspStateMachine.h
+    VideoRecordingFileNamer.cpp
+    VideoRecordingFileNamer.h
+    VideoRecordingSession.cpp
+    VideoRecordingSession.h
 )
 
 add_library(${PROJECT_NAMESPACE}::media_state ALIAS ${PROJECT_MEDIA_STATE_TARGET})
@@ -52,6 +56,8 @@ add_library(${PROJECT_MEDIA_TARGET} STATIC
     RtspController.h
     RtspDecoderWorker.cpp
     RtspDecoderWorker.h
+    RtspRecorder.cpp
+    RtspRecorder.h
     VideoInferenceController.cpp
     VideoInferenceController.h
     YoloInferenceWorker.cpp

@@ -149,6 +149,25 @@ add_test(
     COMMAND ${PROJECT_RTSP_STATE_TEST_TARGET}
 )
 
+set(PROJECT_VIDEO_RECORDING_TEST_TARGET "${PROJECT_NAME}_video_recording_tests")
+
+add_executable(${PROJECT_VIDEO_RECORDING_TEST_TARGET}
+    test_video_recording.cpp
+)
+
+target_link_libraries(${PROJECT_VIDEO_RECORDING_TEST_TARGET}
+    PRIVATE
+        ${PROJECT_NAMESPACE}::media_state
+        Qt${QT_VERSION_MAJOR}::Test
+)
+
+project_apply_compiler_options(${PROJECT_VIDEO_RECORDING_TEST_TARGET})
+
+add_test(
+    NAME ${PROJECT_VIDEO_RECORDING_TEST_TARGET}
+    COMMAND ${PROJECT_VIDEO_RECORDING_TEST_TARGET}
+)
+
 set(PROJECT_VIDEO_INFERENCE_TEST_TARGET "${PROJECT_NAME}_video_inference_tests")
 
 add_executable(${PROJECT_VIDEO_INFERENCE_TEST_TARGET}
@@ -208,6 +227,38 @@ add_executable(${PROJECT_VIDEO_PERFORMANCE_TARGET}
     video_performance_acceptance.cpp
 )
 
+set(PROJECT_RTSP_RECORDING_ACCEPTANCE_TARGET "${PROJECT_NAME}_rtsp_recording_acceptance")
+
+add_executable(${PROJECT_RTSP_RECORDING_ACCEPTANCE_TARGET}
+    rtsp_recording_acceptance.cpp
+)
+
+set_target_properties(${PROJECT_RTSP_RECORDING_ACCEPTANCE_TARGET}
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/acceptance"
+)
+
+target_link_libraries(${PROJECT_RTSP_RECORDING_ACCEPTANCE_TARGET}
+    PRIVATE
+        ${PROJECT_NAMESPACE}::media
+        "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/lib/avcodec.lib"
+        "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/lib/avformat.lib"
+        "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/lib/avutil.lib"
+        Qt${QT_VERSION_MAJOR}::Core
+)
+
+target_include_directories(${PROJECT_RTSP_RECORDING_ACCEPTANCE_TARGET}
+    SYSTEM PRIVATE
+        "${PROJECT_SOURCE_DIR}/third_party/ffmpeg/include"
+)
+
+target_compile_definitions(${PROJECT_RTSP_RECORDING_ACCEPTANCE_TARGET}
+    PRIVATE
+        __STDC_CONSTANT_MACROS
+)
+
+project_apply_compiler_options(${PROJECT_RTSP_RECORDING_ACCEPTANCE_TARGET})
+
 set_target_properties(${PROJECT_VIDEO_PERFORMANCE_TARGET}
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/acceptance"
@@ -259,6 +310,7 @@ if(WIN32)
         ${PROJECT_LOGIN_CREDENTIALS_TEST_TARGET}
         ${PROJECT_MAP_INTERACTION_TEST_TARGET}
         ${PROJECT_RTSP_STATE_TEST_TARGET}
+        ${PROJECT_VIDEO_RECORDING_TEST_TARGET}
         ${PROJECT_TRACK_WORKBENCH_TEST_TARGET}
         ${PROJECT_VIDEO_INFERENCE_TEST_TARGET}
         ${PROJECT_YOLO_RUNTIME_TEST_TARGET}

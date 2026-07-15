@@ -28,7 +28,8 @@
 #include "ui/VideoStreamWidget.h"
 #include "workbench/TrackTableWidget.h"
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent)
 {
     qRegisterMetaType<utms::RadarFrame>();
     qRegisterMetaType<utms::UdpStatus>();
@@ -321,10 +322,20 @@ void MainWindow::setupVideoController()
             &utms::RtspController::disconnectFromStream);
     connect(video_stream_widget_, &utms::VideoStreamWidget::detectionEnabledRequested, rtsp_controller_,
             &utms::RtspController::setDetectionEnabled);
+    connect(video_stream_widget_, &utms::VideoStreamWidget::startRecordingRequested, rtsp_controller_,
+            &utms::RtspController::startRecording);
+    connect(video_stream_widget_, &utms::VideoStreamWidget::stopRecordingRequested, rtsp_controller_,
+            &utms::RtspController::stopRecording);
+    connect(video_stream_widget_, &utms::VideoStreamWidget::openRecordingDirectoryRequested, rtsp_controller_,
+            &utms::RtspController::openRecordingDirectory);
     connect(rtsp_controller_, &utms::RtspController::stateChanged, video_stream_widget_,
             &utms::VideoStreamWidget::setConnectionState);
     connect(rtsp_controller_, &utms::RtspController::detectionStateChanged, video_stream_widget_,
             &utms::VideoStreamWidget::setDetectionState);
+    connect(rtsp_controller_, &utms::RtspController::recordingStateChanged, video_stream_widget_,
+            &utms::VideoStreamWidget::setRecordingState);
+    connect(rtsp_controller_, &utms::RtspController::recordingDurationChanged, video_stream_widget_,
+            &utms::VideoStreamWidget::setRecordingDuration);
     connect(rtsp_controller_, &utms::RtspController::frameReady, video_stream_widget_,
             &utms::VideoStreamWidget::setFrame);
     connect(rtsp_controller_, &utms::RtspController::stopped, this, &MainWindow::handleVideoWorkerStopped);

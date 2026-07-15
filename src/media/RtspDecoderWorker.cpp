@@ -5,6 +5,7 @@
 
 #include <QByteArray>
 #include <QDebug>
+#include <QMutexLocker>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -13,6 +14,8 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
 }
+
+#include "media/RtspRecorder.h"
 
 namespace utms {
 namespace {
@@ -177,11 +180,32 @@ QImage convertFrameToRgb(AVFrame &decoded_frame, SwsContextPtr &conversion_conte
 
 } // namespace
 
-RtspDecoderWorker::RtspDecoderWorker(QObject *parent) : QObject(parent) {}
+RtspDecoderWorker::RtspDecoderWorker(QObject *parent)
+    : QObject(parent)
+{}
 
 void RtspDecoderWorker::prepareStart() { stop_requested_.store(false, std::memory_order_release); }
 
 void RtspDecoderWorker::requestStop() { stop_requested_.store(true, std::memory_order_release); }
+
+void RtspDecoderWorker::requestStartRecording(quint64 attempt_id, const QString &output_directory)
+{
+    QMutexLocker locker(&recording_mutex_);
+    recording_attempt_id_ = attempt_id;
+    recording_requested_at_ms_ = videoRecordingMonotonicTimeMs();
+    recording_output_directory_ = output_directory;
+    recording_stop_reason_.clear();
+    recording_start_requested_ = true;
+    recording_stop_requested_ = false;
+}
+
+void RtspDecoderWorker::requestStopRecording(const QString &reason)
+{
+    QMutexLocker locker(&recording_mutex_);
+    recording_start_requested_ = false;
+    recording_stop_requested_ = true;
+    recording_stop_reason_ = reason;
+}
 
 void RtspDecoderWorker::decode(quint64 attempt_id, const QString &stream_url)
 {
@@ -212,6 +236,11 @@ void RtspDecoderWorker::decode(quint64 attempt_id, const QString &stream_url)
     PacketPtr packet(av_packet_alloc());
     FramePtr decoded_frame(av_frame_alloc());
     SwsContextPtr conversion_context;
+    RtspRecorder recorder;
+    connect(&recorder, &RtspRecorder::stateChanged, this, &RtspDecoderWorker::recordingStateChanged,
+            Qt::DirectConnection);
+    connect(&recorder, &RtspRecorder::durationChanged, this, &RtspDecoderWorker::recordingDurationChanged,
+            Qt::DirectConnection);
     if (failure_detail.isEmpty() && (packet == nullptr || decoded_frame == nullptr)) {
         failure_detail = tr("无法分配视频解码缓冲区");
     }
@@ -222,6 +251,7 @@ void RtspDecoderWorker::decode(quint64 attempt_id, const QString &stream_url)
     }
 
     while (playback_started && !stop_requested_.load(std::memory_order_acquire)) {
+        pollRecording(attempt_id, recorder);
         const int read_result = av_read_frame(format_context.get(), packet.get());
         if (read_result < 0) {
             if (!stop_requested_.load(std::memory_order_acquire)) {
@@ -230,10 +260,14 @@ void RtspDecoderWorker::decode(quint64 attempt_id, const QString &stream_url)
             break;
         }
 
+        pollRecording(attempt_id, recorder);
+
         if (packet->stream_index != video_decoder.stream_index) {
             av_packet_unref(packet.get());
             continue;
         }
+
+        recorder.processVideoPacket(*packet, *format_context->streams[video_decoder.stream_index]);
 
         const int send_result = avcodec_send_packet(video_decoder.codec_context.get(), packet.get());
         av_packet_unref(packet.get());
@@ -266,6 +300,12 @@ void RtspDecoderWorker::decode(quint64 attempt_id, const QString &stream_url)
         }
     }
 
+    // 阻塞读取期间可能收到最后一个启停意图；退出前消费一次，避免 UI
+    // 停留在“正在停止”。
+    processRecordingIntent(attempt_id, recorder);
+    recorder.interrupt(stop_requested_.load(std::memory_order_acquire) ? tr("解码工作线程停止") : tr("RTSP 播放中断"));
+    clearRecordingIntent(attempt_id);
+
     if (!stop_requested_.load(std::memory_order_acquire) && !failure_detail.isEmpty()) {
         if (playback_started) {
             emit playbackInterrupted(attempt_id, failure_detail);
@@ -281,6 +321,54 @@ void RtspDecoderWorker::decode(quint64 attempt_id, const QString &stream_url)
         }
     }
     emit decodingFinished(attempt_id);
+}
+
+void RtspDecoderWorker::processRecordingIntent(quint64 attempt_id, RtspRecorder &recorder)
+{
+    bool should_start = false;
+    bool should_stop = false;
+    qint64 requested_at_ms = 0;
+    QString output_directory;
+    QString stop_reason;
+    {
+        QMutexLocker locker(&recording_mutex_);
+        if (recording_stop_requested_) {
+            should_stop = true;
+            stop_reason = recording_stop_reason_;
+            recording_stop_requested_ = false;
+            recording_start_requested_ = false;
+        } else if (recording_start_requested_ && recording_attempt_id_ == attempt_id) {
+            should_start = true;
+            requested_at_ms = recording_requested_at_ms_;
+            output_directory = recording_output_directory_;
+            recording_start_requested_ = false;
+        }
+    }
+
+    if (should_stop) {
+        recorder.interrupt(stop_reason);
+    } else if (should_start) {
+        recorder.requestStart(output_directory, requested_at_ms);
+    }
+}
+
+void RtspDecoderWorker::pollRecording(quint64 attempt_id, RtspRecorder &recorder)
+{
+    processRecordingIntent(attempt_id, recorder);
+    recorder.checkKeyframeTimeout();
+}
+
+void RtspDecoderWorker::clearRecordingIntent(quint64 attempt_id)
+{
+    QMutexLocker locker(&recording_mutex_);
+    if (recording_attempt_id_ == attempt_id) {
+        recording_attempt_id_ = 0;
+        recording_requested_at_ms_ = 0;
+        recording_output_directory_.clear();
+        recording_start_requested_ = false;
+    }
+    recording_stop_requested_ = false;
+    recording_stop_reason_.clear();
 }
 
 int RtspDecoderWorker::interruptCallback(void *opaque)
