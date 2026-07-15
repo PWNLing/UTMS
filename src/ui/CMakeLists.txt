@@ -22,6 +22,8 @@ add_library(${PROJECT_UI_TARGET} STATIC
     OnlineMapWidget.h
     StatisticsWidget.cpp
     StatisticsWidget.h
+    SystemMonitorWidget.cpp
+    SystemMonitorWidget.h
     VideoStreamWidget.cpp
     VideoStreamWidget.h
     mainwindow.cpp
@@ -56,6 +58,7 @@ target_include_directories(${PROJECT_UI_TARGET}
 # 需要继续传播给使用该模块的目标。
 target_link_libraries(${PROJECT_UI_TARGET}
     PUBLIC
+        ${PROJECT_NAMESPACE}::core
         ${PROJECT_NAMESPACE}::network
         ${PROJECT_NAMESPACE}::map
         ${PROJECT_NAMESPACE}::media

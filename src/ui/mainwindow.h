@@ -14,6 +14,7 @@ namespace utms {
 class MapPanel;
 class BottomStatusBar;
 class StatisticsWidget;
+class SystemMonitorWidget;
 class TrackTableWidget;
 class RtspController;
 class VideoStreamWidget;
@@ -41,6 +42,7 @@ private slots:
     void handleUdpStatusChanged(utms::UdpStatus status, const QString &detail);
     void handleUdpWorkerStopped();
     void handleVideoWorkerStopped();
+    void handleSystemMonitorStopped();
     void updateCurrentFrame(const utms::RadarFrame &frame);
 
 private:
@@ -61,6 +63,7 @@ private:
     QDoubleSpinBox *latitude_spin_box_ = nullptr;
     QPushButton *locate_radar_button_ = nullptr;
     utms::StatisticsWidget *statistics_widget_ = nullptr;
+    utms::SystemMonitorWidget *system_monitor_widget_ = nullptr;
     utms::BottomStatusBar *bottom_status_bar_ = nullptr;
     utms::VideoStreamWidget *video_stream_widget_ = nullptr;
     utms::RtspController *rtsp_controller_ = nullptr;
@@ -69,4 +72,5 @@ private:
     bool shutdown_started_ = false;
     bool udp_shutdown_complete_ = false;
     bool video_shutdown_complete_ = false;
+    bool monitor_shutdown_complete_ = false;
 };

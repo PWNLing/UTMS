@@ -43,6 +43,51 @@ add_test(
     COMMAND ${PROJECT_LOGIN_CREDENTIALS_TEST_TARGET}
 )
 
+set(PROJECT_SYSTEM_METRICS_TEST_TARGET "${PROJECT_NAME}_system_metrics_tests")
+
+add_executable(${PROJECT_SYSTEM_METRICS_TEST_TARGET}
+    test_system_metrics.cpp
+)
+
+target_link_libraries(${PROJECT_SYSTEM_METRICS_TEST_TARGET}
+    PRIVATE
+        ${PROJECT_NAMESPACE}::core
+        Qt${QT_VERSION_MAJOR}::Test
+)
+
+project_apply_compiler_options(${PROJECT_SYSTEM_METRICS_TEST_TARGET})
+
+add_test(
+    NAME ${PROJECT_SYSTEM_METRICS_TEST_TARGET}
+    COMMAND ${CMAKE_COMMAND} -E env
+        "PATH=$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>\;$ENV{PATH}"
+        $<TARGET_FILE:${PROJECT_SYSTEM_METRICS_TEST_TARGET}>
+)
+
+set(PROJECT_SYSTEM_MONITOR_WIDGET_TEST_TARGET "${PROJECT_NAME}_system_monitor_widget_tests")
+
+add_executable(${PROJECT_SYSTEM_MONITOR_WIDGET_TEST_TARGET}
+    test_system_monitor_widget.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/SystemMonitorWidget.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/SystemMonitorWidget.h
+)
+
+target_link_libraries(${PROJECT_SYSTEM_MONITOR_WIDGET_TEST_TARGET}
+    PRIVATE
+        ${PROJECT_NAMESPACE}::core
+        Qt${QT_VERSION_MAJOR}::Test
+        Qt${QT_VERSION_MAJOR}::Widgets
+)
+
+project_apply_compiler_options(${PROJECT_SYSTEM_MONITOR_WIDGET_TEST_TARGET})
+
+add_test(
+    NAME ${PROJECT_SYSTEM_MONITOR_WIDGET_TEST_TARGET}
+    COMMAND ${CMAKE_COMMAND} -E env
+        "PATH=$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>\;$ENV{PATH}"
+        $<TARGET_FILE:${PROJECT_SYSTEM_MONITOR_WIDGET_TEST_TARGET}>
+)
+
 set(PROJECT_MAP_INTERACTION_TEST_TARGET "${PROJECT_NAME}_map_interaction_tests")
 
 add_executable(${PROJECT_MAP_INTERACTION_TEST_TARGET}

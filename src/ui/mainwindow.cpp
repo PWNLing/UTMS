@@ -24,6 +24,7 @@
 #include "ui/BottomStatusBar.h"
 #include "ui/MapPanel.h"
 #include "ui/StatisticsWidget.h"
+#include "ui/SystemMonitorWidget.h"
 #include "ui/VideoStreamWidget.h"
 #include "workbench/TrackTableWidget.h"
 
@@ -51,7 +52,9 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     const bool udp_stopped = udp_shutdown_complete_ || udp_thread_ == nullptr || !udp_thread_->isRunning();
     const bool video_stopped = video_shutdown_complete_ || rtsp_controller_ == nullptr;
-    if (udp_stopped && video_stopped) {
+    const bool monitor_stopped =
+        monitor_shutdown_complete_ || system_monitor_widget_ == nullptr || system_monitor_widget_->isShutdownComplete();
+    if (udp_stopped && video_stopped && monitor_stopped) {
         event->accept();
         return;
     }
@@ -70,6 +73,11 @@ void MainWindow::closeEvent(QCloseEvent *event)
         } else {
             video_shutdown_complete_ = true;
         }
+        if (system_monitor_widget_ != nullptr) {
+            system_monitor_widget_->shutdown();
+        } else {
+            monitor_shutdown_complete_ = true;
+        }
         completeShutdownIfReady();
     }
 }
@@ -87,9 +95,15 @@ void MainWindow::handleVideoWorkerStopped()
     completeShutdownIfReady();
 }
 
+void MainWindow::handleSystemMonitorStopped()
+{
+    monitor_shutdown_complete_ = true;
+    completeShutdownIfReady();
+}
+
 void MainWindow::completeShutdownIfReady()
 {
-    if (shutdown_started_ && udp_shutdown_complete_ && video_shutdown_complete_) {
+    if (shutdown_started_ && udp_shutdown_complete_ && video_shutdown_complete_ && monitor_shutdown_complete_) {
         close();
     }
 }
@@ -212,6 +226,10 @@ void MainWindow::setupUi()
 
     video_stream_widget_ = new utms::VideoStreamWidget(configuration_tabs);
     configuration_tabs->addTab(video_stream_widget_, tr("视频流"));
+
+    system_monitor_widget_ = new utms::SystemMonitorWidget(configuration_tabs);
+    configuration_tabs->addTab(system_monitor_widget_, tr("系统监控"));
+    connect(system_monitor_widget_, &utms::SystemMonitorWidget::stopped, this, &MainWindow::handleSystemMonitorStopped);
 
     data_splitter->addWidget(track_table_);
     data_splitter->addWidget(configuration_tabs);
