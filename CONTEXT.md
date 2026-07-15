@@ -11,8 +11,24 @@ The current product phase focused on radar display control, UDP JSON intake, onl
 _Avoid_: Video phase, full system, installer release
 
 **Second-stage video capabilities**:
-The planned second-stage scope for one RTSP video stream, FFmpeg decoding, YOLO ONNX Runtime detection, and video presentation. Radar-video association is not part of this stage.
+The planned second-stage scope for one RTSP video stream, FFmpeg decoding, YOLO ONNX Runtime detection, video presentation, operator-controlled recording, startup login, and local system monitoring. Radar-video association is not part of this stage.
 _Avoid_: First-stage video, radar-video association
+
+**Login gate**:
+The mandatory startup credential check that must succeed before an operator can enter the main application. It is a fixed demonstration login and does not represent persistent identity, registration, roles, or authorization.
+_Avoid_: User management, account system, permission system
+
+**Host system metrics**:
+The local computer's aggregate CPU utilization and physical-memory usage, presented independently of UTMS itself.
+_Avoid_: Per-core metrics, disk monitoring, network monitoring, GPU monitoring, hardware telemetry
+
+**UTMS process metrics**:
+The CPU utilization and memory usage attributable to the running UTMS process, presented alongside host system metrics for stability observation.
+_Avoid_: Host system metrics, process manager
+
+**System monitoring session**:
+An operator-controlled period in which UTMS samples and displays host and UTMS process metrics. It is disabled by default, can be started and stopped from the system-monitoring tab, and shows no stale metrics after it stops.
+_Avoid_: Always-on telemetry, background service
 
 ### Video Data
 
@@ -31,6 +47,14 @@ _Avoid_: Video widget, inference worker
 **Video inference worker**:
 The worker-side boundary that turns the latest decoded frame into video detections using the configured YOLO model. It is separate from RTSP decoding and UI rendering.
 _Avoid_: Video decoder, UI detector
+
+**RTSP video recording**:
+An operator-controlled capture of the current RTSP source's original encoded video track into one local MP4 file. It excludes audio, video detections, the UTMS interface, screen content, and local playback management.
+_Avoid_: Screen recording, annotated recording, transcoded recording, recording library
+
+**Recording session**:
+One requested RTSP video recording that becomes active only when the next video keyframe can be captured. Its duration begins when recording becomes active; it fails rather than remaining in preparation for more than 10 seconds.
+_Avoid_: Continuous archive, scheduled recording
 
 ### Radar Data
 

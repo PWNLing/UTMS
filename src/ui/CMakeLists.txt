@@ -10,6 +10,8 @@ set(PROJECT_UI_TARGET "${PROJECT_NAME}_ui")
 add_library(${PROJECT_UI_TARGET} STATIC
     BottomStatusBar.cpp
     BottomStatusBar.h
+    LoginDialog.cpp
+    LoginDialog.h
     MapPanel.cpp
     MapPanel.h
     MapWebBridge.cpp

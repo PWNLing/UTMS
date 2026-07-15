@@ -1,5 +1,3 @@
-#include "ui/mainwindow.h"
-
 #include <cstdlib>
 #include <exception>
 
@@ -7,6 +5,8 @@
 #include <QDir>
 
 #include "core/Logger.h"
+#include "ui/LoginDialog.h"
+#include "ui/mainwindow.h"
 
 namespace {
 
@@ -35,6 +35,13 @@ int main(int argc, char *argv[]) {
     }
     std::set_terminate(logUnhandledException);
     qInfo() << "Application: started";
+
+    LoginDialog login_dialog;
+    if (login_dialog.exec() != QDialog::Accepted) {
+        qInfo() << "Application: login cancelled; exiting";
+        utms::Logger::shutdown();
+        return 0;
+    }
 
     int exit_code = 0;
     {

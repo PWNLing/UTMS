@@ -1,6 +1,8 @@
 set(PROJECT_CORE_TARGET "${PROJECT_NAME}_core")
 
 add_library(${PROJECT_CORE_TARGET} STATIC
+    LoginCredentialValidator.cpp
+    LoginCredentialValidator.h
     Logger.cpp
     Logger.h
     RadarFrameStore.cpp

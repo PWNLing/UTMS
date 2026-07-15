@@ -2,4 +2,7 @@
     <qresource prefix="/map">
         <file alias="online_map.html">map/online_map.html</file>
     </qresource>
+    <qresource prefix="/images">
+        <file alias="guet_logo.svg">images/guet_logo.svg</file>
+    </qresource>
 </RCC>

@@ -24,6 +24,25 @@ add_test(
     COMMAND ${PROJECT_TEST_TARGET}
 )
 
+set(PROJECT_LOGIN_CREDENTIALS_TEST_TARGET "${PROJECT_NAME}_login_credentials_tests")
+
+add_executable(${PROJECT_LOGIN_CREDENTIALS_TEST_TARGET}
+    test_login_credentials.cpp
+)
+
+target_link_libraries(${PROJECT_LOGIN_CREDENTIALS_TEST_TARGET}
+    PRIVATE
+        ${PROJECT_NAMESPACE}::core
+        Qt${QT_VERSION_MAJOR}::Test
+)
+
+project_apply_compiler_options(${PROJECT_LOGIN_CREDENTIALS_TEST_TARGET})
+
+add_test(
+    NAME ${PROJECT_LOGIN_CREDENTIALS_TEST_TARGET}
+    COMMAND ${PROJECT_LOGIN_CREDENTIALS_TEST_TARGET}
+)
+
 set(PROJECT_MAP_INTERACTION_TEST_TARGET "${PROJECT_NAME}_map_interaction_tests")
 
 add_executable(${PROJECT_MAP_INTERACTION_TEST_TARGET}
@@ -192,6 +211,7 @@ add_test(
 if(WIN32)
     set_tests_properties(
         ${PROJECT_TEST_TARGET}
+        ${PROJECT_LOGIN_CREDENTIALS_TEST_TARGET}
         ${PROJECT_MAP_INTERACTION_TEST_TARGET}
         ${PROJECT_RTSP_STATE_TEST_TARGET}
         ${PROJECT_TRACK_WORKBENCH_TEST_TARGET}
