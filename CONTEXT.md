@@ -1,17 +1,17 @@
 # UTMS Radar Display Control
 
-UTMS is a single-context radar display control application. Its language describes the first-stage MVP: receiving radar snapshot data over UDP and presenting the latest radar and target state on maps, tables, charts, and status surfaces.
+UTMS is a single-context radar display control application. Its language covers the first-stage radar-display baseline and the delivered second-stage login, video, recording, and system-monitoring capabilities.
 
 ## Language
 
 ### Product Scope
 
 **First-stage MVP**:
-The current product phase focused on radar display control, UDP JSON intake, online/offline map display, current-frame tables, statistics, status, logging, simulation, tests, and source-based Windows delivery.
+The radar-display baseline covers UDP JSON intake, online/offline map display, current-frame tables, statistics, status, logging, simulation, tests, and source-based Windows delivery.
 _Avoid_: Video phase, full system, installer release
 
-**Second-stage video capabilities**:
-The planned second-stage scope for one RTSP video stream, FFmpeg decoding, YOLO ONNX Runtime detection, video presentation, operator-controlled recording, startup login, and local system monitoring. Radar-video association is not part of this stage.
+**Second-stage capabilities**:
+The delivered scope for one RTSP video stream, FFmpeg decoding, YOLO ONNX Runtime detection, video presentation, operator-controlled recording, startup login, and local system monitoring. Radar-video association is not part of this stage.
 _Avoid_: First-stage video, radar-video association
 
 **Login gate**:
@@ -141,5 +141,5 @@ The boundary that converts UDP JSON payloads into domain data and applies field 
 _Avoid_: UDP receiver, table adapter
 
 **Logger**:
-The logging boundary for lifecycle, receive, validation, map, tile, and severe application events. Normal high-frequency frames are not log records.
-_Avoid_: Debug console, frame recorder
+The logging boundary for lifecycle, receive, validation, map, tile, video connection, recording, monitoring, and severe application events. Passwords, normal video frames, normal recording packets, normal detections, and successful per-second metric samples are not log records.
+_Avoid_: Debug console, frame recorder, credential store
