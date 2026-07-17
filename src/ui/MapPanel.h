@@ -52,6 +52,7 @@ private:
     void handleTargetClicked(qint64 track_id);
     void handleOnlineViewChanged(const GeoPosition &center, int zoom);
     void handleOfflineViewChanged(const GeoPosition &center, int zoom);
+    void applySelectionToActiveMap(std::optional<qint64> track_id);
     void applyViewToActiveMap();
     void renderTrajectories(const QDateTime &now);
     void synchronizeActiveMap();

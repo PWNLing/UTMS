@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include <QSet>
-
 namespace utms
 {
 namespace
@@ -58,75 +56,93 @@ qint64 retentionMs(RealtimeTrajectoryDuration duration)
 
 void RealtimeTrajectoryModel::replaceFrame(const RadarFrame &frame)
 {
-    if (frame.received_at.isValid())
-    {
-        const QDateTime storage_cutoff = frame.received_at.addMSecs(-kMaximumStoredDurationMs);
-        for (auto history = histories_.begin(); history != histories_.end();)
-        {
-            if (!history->present && history->missing_since.has_value() &&
-                history->missing_since->msecsTo(frame.received_at) > kDisappearedRetentionMs)
-            {
-                history = histories_.erase(history);
-                continue;
-            }
-
-            for (QVector<TrajectorySample> &path : history->paths)
-            {
-                qsizetype expired_count = 0;
-                while (expired_count < path.size() && path.at(expired_count).sampled_at < storage_cutoff)
-                {
-                    ++expired_count;
-                }
-                if (expired_count > 0)
-                {
-                    path.remove(0, expired_count);
-                }
-            }
-            history->paths.erase(std::remove_if(history->paths.begin(), history->paths.end(),
-                                                [](const QVector<TrajectorySample> &path) { return path.isEmpty(); }),
-                                 history->paths.end());
-            ++history;
-        }
-    }
-
+    // 仅消费已接受帧并维护补充显示状态；调用方须在同一线程顺序调用，本模型不修改 RadarFrame。
+    pruneExpiredHistories(frame.received_at);
     QSet<qint64> current_track_ids;
     for (const TrackData &track : frame.tracks)
     {
         current_track_ids.insert(track.track_id);
-        TrackHistory &history = histories_[track.track_id];
-        history.type = track.type;
-        if (history.paths.isEmpty())
+        updateTrackHistory(track, frame.received_at);
+    }
+    markMissingTracks(current_track_ids, frame.received_at);
+}
+
+void RealtimeTrajectoryModel::pruneExpiredHistories(const QDateTime &now)
+{
+    if (!now.isValid())
+    {
+        return;
+    }
+
+    const QDateTime storage_cutoff = now.addMSecs(-kMaximumStoredDurationMs);
+    for (auto history = histories_.begin(); history != histories_.end();)
+    {
+        if (!history->present && history->missing_since.has_value() &&
+            history->missing_since->msecsTo(now) > kDisappearedRetentionMs)
+        {
+            history = histories_.erase(history);
+            continue;
+        }
+
+        // 始终按最大可选的一分钟窗口裁剪，关闭或缩短显示后仍可在本次运行内恢复已有短航迹。
+        for (QVector<TrajectorySample> &path : history->paths)
+        {
+            qsizetype expired_count = 0;
+            while (expired_count < path.size() && path.at(expired_count).sampled_at < storage_cutoff)
+            {
+                ++expired_count;
+            }
+            if (expired_count > 0)
+            {
+                path.remove(0, expired_count);
+            }
+        }
+        history->paths.erase(std::remove_if(history->paths.begin(), history->paths.end(),
+                                            [](const QVector<TrajectorySample> &path) { return path.isEmpty(); }),
+                             history->paths.end());
+        ++history;
+    }
+}
+
+void RealtimeTrajectoryModel::updateTrackHistory(const TrackData &track, const QDateTime &received_at)
+{
+    TrackHistory &history = histories_[track.track_id];
+    history.type = track.type;
+    if (history.paths.isEmpty())
+    {
+        history.paths.append(QVector<TrajectorySample>{});
+    }
+
+    QVector<TrajectorySample> &current_path = history.paths.last();
+    const bool should_sample =
+        current_path.isEmpty() || current_path.constLast().sampled_at.msecsTo(received_at) >= kSampleIntervalMs;
+    if (should_sample)
+    {
+        const bool disappeared_too_long =
+            history.missing_since.has_value() && history.missing_since->msecsTo(received_at) > kDisappearedRetentionMs;
+        const bool continuity_broken =
+            !current_path.isEmpty() &&
+            (current_path.constLast().sampled_at.msecsTo(received_at) > kMaximumContinuousGapMs ||
+             distanceMeters(current_path.constLast().position, track.position) > kMaximumContinuousJumpMeters ||
+             disappeared_too_long);
+        if (continuity_broken)
         {
             history.paths.append(QVector<TrajectorySample>{});
         }
-
-        QVector<TrajectorySample> &current_path = history.paths.last();
-        const bool should_sample = current_path.isEmpty() ||
-                                   current_path.constLast().sampled_at.msecsTo(frame.received_at) >= kSampleIntervalMs;
-        if (should_sample)
-        {
-            const bool disappeared_too_long =
-                history.missing_since.has_value() &&
-                history.missing_since->msecsTo(frame.received_at) > kDisappearedRetentionMs;
-            if (!current_path.isEmpty() &&
-                (current_path.constLast().sampled_at.msecsTo(frame.received_at) > kMaximumContinuousGapMs ||
-                 distanceMeters(current_path.constLast().position, track.position) > kMaximumContinuousJumpMeters ||
-                 disappeared_too_long))
-            {
-                history.paths.append(QVector<TrajectorySample>{});
-            }
-            history.paths.last().append({track.position, frame.received_at});
-        }
-        history.present = true;
-        history.missing_since.reset();
+        history.paths.last().append({track.position, received_at});
     }
+    history.present = true;
+    history.missing_since.reset();
+}
 
+void RealtimeTrajectoryModel::markMissingTracks(const QSet<qint64> &current_track_ids, const QDateTime &received_at)
+{
     for (auto history = histories_.begin(); history != histories_.end(); ++history)
     {
         if (history->present && !current_track_ids.contains(history.key()))
         {
             history->present = false;
-            history->missing_since = frame.received_at;
+            history->missing_since = received_at;
         }
     }
 }
@@ -159,6 +175,7 @@ void RealtimeTrajectoryModel::clearSelectionRetainingFocusedTrajectory(const QDa
 
 QVector<RealtimeTrajectory> RealtimeTrajectoryModel::visibleTrajectories(const QDateTime &now) const
 {
+    // 输出仅包含渲染所需折线；不暴露采样点所有权，也不改变当前帧目标集合。
     QVector<RealtimeTrajectory> trajectories;
     const qint64 retention_ms = retentionMs(duration_);
     if (retention_ms == 0 || (!show_all_targets_ && !focused_track_id_.has_value()))
@@ -186,45 +203,58 @@ QVector<RealtimeTrajectory> RealtimeTrajectoryModel::visibleTrajectories(const Q
         trajectory.track_id = history.key();
         trajectory.type = history->type;
         trajectory.selected = selected;
-        for (const QVector<TrajectorySample> &path : history->paths)
-        {
-            QVector<GeoPosition> visible_points;
-            for (const TrajectorySample &sample : path)
-            {
-                if (sample.sampled_at >= cutoff)
-                {
-                    visible_points.append(sample.position);
-                }
-            }
-            qsizetype start_index = 0;
-            while (start_index < visible_points.size() - 1)
-            {
-                const qsizetype end_index = std::min(start_index + 9, visible_points.size() - 1);
-                RealtimeTrajectorySegment segment;
-                for (qsizetype point_index = start_index; point_index <= end_index; ++point_index)
-                {
-                    segment.points.append(visible_points.at(point_index));
-                }
-                trajectory.segments.append(segment);
-                start_index = end_index;
-            }
-        }
+        appendVisibleSegments(trajectory, history.value(), cutoff);
         if (trajectory.segments.isEmpty())
         {
             continue;
         }
 
-        for (qsizetype segment_index = 0; segment_index < trajectory.segments.size(); ++segment_index)
-        {
-            trajectory.segments[segment_index].opacity =
-                0.25 + 0.75 * static_cast<qreal>(segment_index + 1) / trajectory.segments.size();
-        }
+        applySegmentOpacities(trajectory);
         trajectories.append(trajectory);
     }
     std::sort(trajectories.begin(), trajectories.end(),
               [](const RealtimeTrajectory &left, const RealtimeTrajectory &right)
               { return left.track_id < right.track_id; });
     return trajectories;
+}
+
+void RealtimeTrajectoryModel::appendVisibleSegments(RealtimeTrajectory &trajectory, const TrackHistory &history,
+                                                    const QDateTime &cutoff)
+{
+    for (const QVector<TrajectorySample> &path : history.paths)
+    {
+        QVector<GeoPosition> visible_points;
+        for (const TrajectorySample &sample : path)
+        {
+            if (sample.sampled_at >= cutoff)
+            {
+                visible_points.append(sample.position);
+            }
+        }
+
+        qsizetype start_index = 0;
+        while (start_index < visible_points.size() - 1)
+        {
+            const qsizetype end_index = std::min(start_index + 9, visible_points.size() - 1);
+            RealtimeTrajectorySegment segment;
+            for (qsizetype point_index = start_index; point_index <= end_index; ++point_index)
+            {
+                segment.points.append(visible_points.at(point_index));
+            }
+            trajectory.segments.append(segment);
+            // 相邻显示段复用边界点，避免渐隐分段在地图上出现可见裂缝。
+            start_index = end_index;
+        }
+    }
+}
+
+void RealtimeTrajectoryModel::applySegmentOpacities(RealtimeTrajectory &trajectory)
+{
+    for (qsizetype segment_index = 0; segment_index < trajectory.segments.size(); ++segment_index)
+    {
+        trajectory.segments[segment_index].opacity =
+            0.25 + 0.75 * static_cast<qreal>(segment_index + 1) / trajectory.segments.size();
+    }
 }
 
 } // namespace utms

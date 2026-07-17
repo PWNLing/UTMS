@@ -3,6 +3,7 @@
 #include <optional>
 
 #include <QHash>
+#include <QSet>
 #include <QVector>
 
 #include "core/RadarTypes.h"
@@ -57,6 +58,13 @@ private:
         std::optional<QDateTime> missing_since;
         bool present = false;
     };
+
+    void pruneExpiredHistories(const QDateTime &now);
+    void updateTrackHistory(const TrackData &track, const QDateTime &received_at);
+    void markMissingTracks(const QSet<qint64> &current_track_ids, const QDateTime &received_at);
+    static void appendVisibleSegments(RealtimeTrajectory &trajectory, const TrackHistory &history,
+                                      const QDateTime &cutoff);
+    static void applySegmentOpacities(RealtimeTrajectory &trajectory);
 
     QHash<qint64, TrackHistory> histories_;
     RealtimeTrajectoryDuration duration_ = RealtimeTrajectoryDuration::kThirtySeconds;

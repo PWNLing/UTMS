@@ -13,6 +13,12 @@
 
 namespace utms
 {
+namespace
+{
+
+constexpr int kTrajectoryRefreshIntervalMs = 500;
+
+} // namespace
 
 MapPanel::MapPanel(QWidget *parent)
     : QWidget(parent), map_stack_(new QStackedWidget(this)), trajectory_refresh_timer_(new QTimer(this)),
@@ -29,7 +35,7 @@ MapPanel::MapPanel(QWidget *parent)
     connect(offline_map_, &OfflineMapWidget::targetClicked, this, &MapPanel::handleTargetClicked);
     connect(online_map_, &OnlineMapWidget::viewChanged, this, &MapPanel::handleOnlineViewChanged);
     connect(offline_map_, &OfflineMapWidget::viewChanged, this, &MapPanel::handleOfflineViewChanged);
-    trajectory_refresh_timer_->setInterval(500);
+    trajectory_refresh_timer_->setInterval(kTrajectoryRefreshIntervalMs);
     connect(trajectory_refresh_timer_, &QTimer::timeout, this,
             [this]() { renderTrajectories(QDateTime::currentDateTime()); });
     trajectory_refresh_timer_->start();
@@ -99,14 +105,7 @@ bool MapPanel::setSelectedTrackId(std::optional<qint64> track_id)
         return false;
     }
     trajectory_model_.setSelectedTrackId(track_id);
-    if (map_mode_ == MapMode::kOnline)
-    {
-        online_map_->setSelectedTrackId(track_id);
-    }
-    else
-    {
-        offline_map_->setSelectedTrackId(track_id);
-    }
+    applySelectionToActiveMap(track_id);
     renderTrajectories(QDateTime::currentDateTime());
     return true;
 }
@@ -115,15 +114,20 @@ void MapPanel::clearSelectionForMissingTarget()
 {
     state_.setSelectedTrackId(std::nullopt);
     trajectory_model_.clearSelectionRetainingFocusedTrajectory(QDateTime::currentDateTime());
+    applySelectionToActiveMap(std::nullopt);
+    renderTrajectories(QDateTime::currentDateTime());
+}
+
+void MapPanel::applySelectionToActiveMap(std::optional<qint64> track_id)
+{
     if (map_mode_ == MapMode::kOnline)
     {
-        online_map_->setSelectedTrackId(std::nullopt);
+        online_map_->setSelectedTrackId(track_id);
     }
     else
     {
-        offline_map_->setSelectedTrackId(std::nullopt);
+        offline_map_->setSelectedTrackId(track_id);
     }
-    renderTrajectories(QDateTime::currentDateTime());
 }
 
 bool MapPanel::selectTarget(qint64 track_id, bool center_on_target)
