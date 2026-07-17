@@ -14,6 +14,10 @@ _Avoid_: Video phase, full system, installer release
 The delivered scope for one RTSP video stream, FFmpeg decoding, YOLO ONNX Runtime detection, video presentation, operator-controlled recording, startup login, and local system monitoring. Radar-video association is not part of this stage.
 _Avoid_: First-stage video, radar-video association
 
+**Third-stage capabilities**:
+The planned scope for short-lived realtime trajectories, persisted radar-history query and replay, and geofence-driven target alerts. These capabilities extend accepted radar frames without changing current-frame snapshot semantics.
+_Avoid_: Video replay, radar-video association, multi-radar fusion
+
 **Login gate**:
 The mandatory startup credential check that must succeed before an operator can enter the main application. It is a fixed demonstration login and does not represent persistent identity, registration, roles, or authorization.
 _Avoid_: User management, account system, permission system
@@ -66,6 +70,50 @@ _Avoid_: Accumulated frame, historical frame
 The rule that each accepted UDP JSON message replaces the previous target set with its own `tracks` content. Missing targets disappear immediately and no historical track points or trajectory lines are retained.
 _Avoid_: Incremental update, target timeout, track history
 
+**Realtime trajectory**:
+A bounded, short-lived polyline derived from positions sampled every five hundred milliseconds for one target's live map presentation. It is supplementary display state and does not alter the current-frame target set; it defaults to the selected target's latest 30 seconds and can be disabled, shortened, lengthened, or shown for all targets. It is a category-coloured, round-joined solid line whose display shares ten-point endpoints between fading segments; sample points are hidden by default. A target can resume its trajectory only after a brief absence; time gaps or implausible position jumps begin a new segment.
+_Avoid_: Historical replay, persisted track, radar track ID
+
+**History session**:
+The persisted recording interval created by one successful UDP-listener start and closed when that listener stops. It owns recorded radar frames and their valid targets; live display receives every accepted frame while persistence samples the latest accepted full snapshot at an operator-selected frequency, defaulting to 2 FPS. A session still marked active after an application restart is retained and classified as abnormally ended.
+_Avoid_: Video recording session, continuous archive
+
+**History retention**:
+The operator-configured period for which persisted history sessions and their data remain available. It defaults to seven days, supports one through thirty days, and removes expired data automatically; manual deletion is limited to explicitly confirmed sessions.
+_Avoid_: Cloud backup, permanent archive, remote database
+
+**History export**:
+A CSV representation of the currently queried history result or one selected target's trajectory points. It contains only persisted radar-history fields and does not export raw complete frames as JSON.
+_Avoid_: JSON frame export, video export, database backup
+
+**History store**:
+The local SQLite persistence owned by the history-recording path. It organizes history sessions, sampled accepted radar frames, and their valid targets for indexed replay and query. It also retains the selected history sampling frequency, retention period, geofences, and alert rules. A store failure degrades only persistence; it is retried in the background and never blocks live display or alert analysis.
+_Avoid_: JSON archive, cloud database, remote database
+
+**Replay mode**:
+The explicit operator state in which map, table, and statistics show a selected historical radar frame while accepted live frames continue to be displayed only in the background data flow, recorded, and analysed for alerts. Historical frames are selected by a query scoped by time range, session, track ID, and target category. It supports frame stepping, time seeking, and scaled playback; a long data gap is explicitly reported and skipped rather than interpolated. Its map displays the selected target's trajectory from the query start through the current replay time. Returning to live mode immediately restores the latest live frame and clears replay-only trajectory state.
+_Avoid_: Paused UDP, video playback, live mode
+
+**Geofence**:
+A persisted enabled or disabled GCJ-02 geographic boundary that defines an area to evaluate for target-alert rules. A geofence can be circular, rectangular, or polygonal; rectangles are non-rotated GCJ-02 boundaries defined by southwest and northeast corners, and polygons contain three to twenty non-self-intersecting vertices. Disabled geofences do not participate in new alert evaluation but retain their existing alert history.
+_Avoid_: Map layer, target category
+
+**Alert rule**:
+A persisted enabled or disabled condition that evaluates accepted live targets against a scope, threshold, and geofence to create target alerts. The supported rule types are stable geofence entry, stable geofence exit, geofence dwell timeout, and geofence-contained speeding; its speeding threshold uses metres per second and its dwell threshold is between five seconds and twenty-four hours. Entry, exit, and speeding rules each have a configurable zero-to-sixty-second confirmation duration that defaults to one second; entry uses the boundary and confirmed exit requires a five-metre outward margin. Dwell rules do not add confirmation time beyond their dwell threshold.
+_Avoid_: Per-frame UI notification, video detection
+
+**Alert engine**:
+The worker-side boundary that evaluates accepted live radar frames against persisted geofences and alert rules, then emits structured target alerts. It does not access the GUI and its failure cannot stop live display or history recording.
+_Avoid_: Alert center widget, replay evaluator, UDP receiver
+
+**Target alert**:
+A durable record that one target satisfied one alert rule at a particular time, with an acknowledgement state. It is not re-evaluated or recreated during historical replay; replay only shows the persisted alert markers. A target's geofence state can survive a brief disappearance, but expiry of that state is not an exit alert. A continuous condition creates only one alert until it recovers, and repeated alerts for the same rule and target are constrained by a configurable cooldown that defaults to thirty seconds. Alerts are retained when acknowledged, and acknowledgements record the fixed demonstration operator `root` and an optional handling note. A severe alert has a one-time sound, brief map highlight, and non-modal operator notification. Selecting an alert locates its recorded position and selects its target only when that target remains visible.
+_Avoid_: Alarm sound, toast notification, replay result
+
+**Alert center**:
+The operator-facing tab for reviewing and acknowledging persisted target alerts, and for entering geofence and alert-rule management.
+_Avoid_: Blocking alert dialog, replay controller, map toolbar
+
 **Target**:
 A displayed object from a valid entry in `tracks`. A target must have a track ID and a valid latitude/longitude pair.
 _Avoid_: Detection, object, point
@@ -93,7 +141,7 @@ The only coordinate system used by radar position, target position, online Amap,
 _Avoid_: WGS-84, BD-09, converted coordinate
 
 **Map panel**:
-The shared map surface boundary that presents either online or offline map mode while preserving the same radar frame, selection, center, zoom, and highlight state.
+The shared map surface boundary that presents either online or offline map mode while preserving the same radar frame, selection, center, zoom, highlight, realtime trajectory, replay trajectory, geofence, and alert-location state.
 _Avoid_: Online map state, offline map state
 
 **Online map**:
