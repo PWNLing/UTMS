@@ -170,15 +170,13 @@ void MainWindow::handleHistoryConfigurationLoaded(const utms::HistoryConfigurati
 void MainWindow::handleHistoryAvailabilityChanged(bool available, const QString &detail)
 {
     const QString color = available ? QStringLiteral("#208a4b") : QStringLiteral("#c0392b");
-    history_status_label_->setText(detail);
-    history_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
+    updateHistoryStatusLabel(detail, color);
 }
 
 void MainWindow::handleHistorySessionActiveChanged(bool active, const QString &detail)
 {
     const QString color = active ? QStringLiteral("#208a4b") : QStringLiteral("#555555");
-    history_status_label_->setText(detail);
-    history_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
+    updateHistoryStatusLabel(detail, color);
 }
 
 void MainWindow::handleHistoryError(const QString &message)
@@ -448,6 +446,12 @@ void MainWindow::requestHistoryShutdown()
         history_shutdown_complete_ = true;
         completeShutdownIfReady();
     }
+}
+
+void MainWindow::updateHistoryStatusLabel(const QString &detail, const QString &color)
+{
+    history_status_label_->setText(detail);
+    history_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
 }
 
 void MainWindow::setupVideoController()

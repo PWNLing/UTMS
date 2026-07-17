@@ -1,5 +1,8 @@
 #include "history/HistoryStore.h"
 
+#include <limits>
+
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QSqlDatabase>
@@ -18,6 +21,21 @@ void setError(QString *error_message, const QString &message)
     }
 }
 
+QString storeText(const char *source_text)
+{
+    return QCoreApplication::translate("HistoryStore", source_text);
+}
+
+void setTransactionError(QSqlDatabase &database, QString *error_message, const QString &operation_error)
+{
+    if (!database.rollback()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "%1；事务回滚失败：%2"))
+                                    .arg(operation_error, database.lastError().text()));
+        return;
+    }
+    setError(error_message, operation_error);
+}
+
 bool executeSchemaStatement(QSqlDatabase &database, const QString &statement, QString *error_message)
 {
     QSqlQuery query(database);
@@ -25,7 +43,9 @@ bool executeSchemaStatement(QSqlDatabase &database, const QString &statement, QS
         return true;
     }
 
-    setError(error_message, QStringLiteral("执行历史数据库结构语句失败: %1").arg(query.lastError().text()));
+    setError(
+        error_message,
+        storeText(QT_TRANSLATE_NOOP("HistoryStore", "执行历史数据库结构语句失败：%1")).arg(query.lastError().text()));
     return false;
 }
 
@@ -81,15 +101,16 @@ bool HistoryStore::initialize(QString *error_message)
     const QFileInfo database_info(database_path_);
     QDir database_directory = database_info.dir();
     if (!database_directory.exists() && !database_directory.mkpath(QStringLiteral("."))) {
-        setError(error_message, QStringLiteral("无法创建历史数据库目录: %1").arg(database_directory.absolutePath()));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "无法创建历史数据库目录：%1"))
+                                    .arg(database_directory.absolutePath()));
         return false;
     }
 
     QSqlDatabase database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection_name_);
     database.setDatabaseName(database_path_);
     if (!database.open()) {
-        setError(error_message,
-                 QStringLiteral("无法打开历史数据库 %1: %2").arg(database_path_, database.lastError().text()));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "无法打开历史数据库 %1：%2"))
+                                    .arg(database_path_, database.lastError().text()));
         database = QSqlDatabase();
         QSqlDatabase::removeDatabase(connection_name_);
         return false;
@@ -128,17 +149,18 @@ bool HistoryStore::initialize(QString *error_message)
     return true;
 }
 
-std::optional<HistoryConfiguration> HistoryStore::loadConfiguration(QString *error_message)
+std::optional<HistoryConfiguration> HistoryStore::loadConfiguration(QString *error_message) const
 {
     if (!initialized_) {
-        setError(error_message, QStringLiteral("历史数据库尚未初始化"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
         return std::nullopt;
     }
 
     QSqlDatabase database = QSqlDatabase::database(connection_name_);
     QSqlQuery query(database);
     if (!query.exec(QStringLiteral("SELECT key, value FROM app_config"))) {
-        setError(error_message, QStringLiteral("读取历史配置失败: %1").arg(query.lastError().text()));
+        setError(error_message,
+                 storeText(QT_TRANSLATE_NOOP("HistoryStore", "读取历史配置失败：%1")).arg(query.lastError().text()));
         return std::nullopt;
     }
 
@@ -151,7 +173,7 @@ std::optional<HistoryConfiguration> HistoryStore::loadConfiguration(QString *err
             const std::optional<HistorySamplingRate> sampling_rate =
                 converted ? samplingRateFromValue(value) : std::nullopt;
             if (!sampling_rate.has_value()) {
-                setError(error_message, QStringLiteral("历史采样频率配置无效"));
+                setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史采样频率配置无效")));
                 return std::nullopt;
             }
             configuration.sampling_rate = sampling_rate.value();
@@ -159,7 +181,7 @@ std::optional<HistoryConfiguration> HistoryStore::loadConfiguration(QString *err
             bool converted = false;
             const int retention_days = query.value(1).toString().toInt(&converted);
             if (!converted || retention_days < 1 || retention_days > 30) {
-                setError(error_message, QStringLiteral("历史保留天数配置无效"));
+                setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史保留天数配置无效")));
                 return std::nullopt;
             }
             configuration.retention_days = retention_days;
@@ -171,23 +193,25 @@ std::optional<HistoryConfiguration> HistoryStore::loadConfiguration(QString *err
 bool HistoryStore::saveConfiguration(const HistoryConfiguration &configuration, QString *error_message)
 {
     if (!initialized_) {
-        setError(error_message, QStringLiteral("历史数据库尚未初始化"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
         return false;
     }
 
     const std::optional<int> sampling_rate = samplingRateValue(configuration.sampling_rate);
     if (!sampling_rate.has_value()) {
-        setError(error_message, QStringLiteral("历史采样频率配置无效"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史采样频率配置无效")));
         return false;
     }
     if (configuration.retention_days < 1 || configuration.retention_days > 30) {
-        setError(error_message, QStringLiteral("历史保留天数必须为 1–30 天"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史保留天数必须为 1–30 天")));
         return false;
     }
 
     QSqlDatabase database = QSqlDatabase::database(connection_name_);
     if (!database.transaction()) {
-        setError(error_message, QStringLiteral("启动历史配置事务失败: %1").arg(database.lastError().text()));
+        setError(
+            error_message,
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "启动历史配置事务失败：%1")).arg(database.lastError().text()));
         return false;
     }
 
@@ -196,8 +220,9 @@ bool HistoryStore::saveConfiguration(const HistoryConfiguration &configuration, 
     query.addBindValue(QStringLiteral("history_sampling_rate"));
     query.addBindValue(QString::number(sampling_rate.value()));
     if (!query.exec()) {
-        database.rollback();
-        setError(error_message, QStringLiteral("保存历史采样频率失败: %1").arg(query.lastError().text()));
+        const QString operation_error =
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "保存历史采样频率失败：%1")).arg(query.lastError().text());
+        setTransactionError(database, error_message, operation_error);
         return false;
     }
 
@@ -205,13 +230,16 @@ bool HistoryStore::saveConfiguration(const HistoryConfiguration &configuration, 
     query.bindValue(0, QStringLiteral("history_retention_days"));
     query.bindValue(1, QString::number(configuration.retention_days));
     if (!query.exec()) {
-        database.rollback();
-        setError(error_message, QStringLiteral("保存历史保留天数失败: %1").arg(query.lastError().text()));
+        const QString operation_error =
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "保存历史保留天数失败：%1")).arg(query.lastError().text());
+        setTransactionError(database, error_message, operation_error);
         return false;
     }
 
     if (!database.commit()) {
-        setError(error_message, QStringLiteral("提交历史配置失败: %1").arg(database.lastError().text()));
+        const QString operation_error =
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "提交历史配置失败：%1")).arg(database.lastError().text());
+        setTransactionError(database, error_message, operation_error);
         return false;
     }
     return true;
@@ -220,11 +248,11 @@ bool HistoryStore::saveConfiguration(const HistoryConfiguration &configuration, 
 std::optional<qint64> HistoryStore::startSession(const QDateTime &started_at, QString *error_message)
 {
     if (!initialized_) {
-        setError(error_message, QStringLiteral("历史数据库尚未初始化"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
         return std::nullopt;
     }
     if (!started_at.isValid()) {
-        setError(error_message, QStringLiteral("历史会话开始时间无效"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史会话开始时间无效")));
         return std::nullopt;
     }
 
@@ -232,11 +260,12 @@ std::optional<qint64> HistoryStore::startSession(const QDateTime &started_at, QS
     QSqlQuery active_query(database);
     if (!active_query.exec(QStringLiteral("SELECT id FROM history_sessions "
                                           "WHERE state = 'active' LIMIT 1"))) {
-        setError(error_message, QStringLiteral("检查活动历史会话失败: %1").arg(active_query.lastError().text()));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "检查活动历史会话失败：%1"))
+                                    .arg(active_query.lastError().text()));
         return std::nullopt;
     }
     if (active_query.next()) {
-        setError(error_message, QStringLiteral("已经存在活动历史会话"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "已经存在活动历史会话")));
         return std::nullopt;
     }
 
@@ -245,14 +274,16 @@ std::optional<qint64> HistoryStore::startSession(const QDateTime &started_at, QS
                                         "VALUES(?, 'active')"));
     insert_query.addBindValue(started_at.toMSecsSinceEpoch());
     if (!insert_query.exec()) {
-        setError(error_message, QStringLiteral("创建历史会话失败: %1").arg(insert_query.lastError().text()));
+        setError(
+            error_message,
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "创建历史会话失败：%1")).arg(insert_query.lastError().text()));
         return std::nullopt;
     }
 
     bool converted = false;
     const qint64 session_id = insert_query.lastInsertId().toLongLong(&converted);
     if (!converted || session_id <= 0) {
-        setError(error_message, QStringLiteral("历史会话已创建但无法读取会话 ID"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史会话已创建但无法读取会话 ID")));
         return std::nullopt;
     }
     return session_id;
@@ -261,11 +292,11 @@ std::optional<qint64> HistoryStore::startSession(const QDateTime &started_at, QS
 bool HistoryStore::closeActiveSession(const QDateTime &ended_at, QString *error_message)
 {
     if (!initialized_) {
-        setError(error_message, QStringLiteral("历史数据库尚未初始化"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
         return false;
     }
     if (!ended_at.isValid()) {
-        setError(error_message, QStringLiteral("历史会话结束时间无效"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史会话结束时间无效")));
         return false;
     }
 
@@ -276,21 +307,22 @@ bool HistoryStore::closeActiveSession(const QDateTime &ended_at, QString *error_
                                  "WHERE state = 'active'"));
     query.addBindValue(ended_at.toMSecsSinceEpoch());
     if (!query.exec()) {
-        setError(error_message, QStringLiteral("关闭历史会话失败: %1").arg(query.lastError().text()));
+        setError(error_message,
+                 storeText(QT_TRANSLATE_NOOP("HistoryStore", "关闭历史会话失败：%1")).arg(query.lastError().text()));
         return false;
     }
     return true;
 }
 
-bool HistoryStore::recoverAbandonedSessions(const QDateTime &recovered_at, QString *error_message)
+std::optional<int> HistoryStore::recoverAbandonedSessions(const QDateTime &recovered_at, QString *error_message)
 {
     if (!initialized_) {
-        setError(error_message, QStringLiteral("历史数据库尚未初始化"));
-        return false;
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return std::nullopt;
     }
     if (!recovered_at.isValid()) {
-        setError(error_message, QStringLiteral("历史会话恢复时间无效"));
-        return false;
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史会话恢复时间无效")));
+        return std::nullopt;
     }
 
     QSqlDatabase database = QSqlDatabase::database(connection_name_);
@@ -300,16 +332,24 @@ bool HistoryStore::recoverAbandonedSessions(const QDateTime &recovered_at, QStri
                                  "WHERE state = 'active'"));
     query.addBindValue(recovered_at.toMSecsSinceEpoch());
     if (!query.exec()) {
-        setError(error_message, QStringLiteral("修复异常历史会话失败: %1").arg(query.lastError().text()));
-        return false;
+        setError(
+            error_message,
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "修复异常历史会话失败：%1")).arg(query.lastError().text()));
+        return std::nullopt;
     }
-    return true;
+
+    const qint64 recovered_count = query.numRowsAffected();
+    if (recovered_count < 0 || recovered_count > std::numeric_limits<int>::max()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "无法确定异常历史会话恢复数量")));
+        return std::nullopt;
+    }
+    return static_cast<int>(recovered_count);
 }
 
-std::optional<QVector<HistorySession>> HistoryStore::loadSessions(QString *error_message)
+std::optional<QVector<HistorySession>> HistoryStore::loadSessions(QString *error_message) const
 {
     if (!initialized_) {
-        setError(error_message, QStringLiteral("历史数据库尚未初始化"));
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
         return std::nullopt;
     }
 
@@ -317,7 +357,8 @@ std::optional<QVector<HistorySession>> HistoryStore::loadSessions(QString *error
     QSqlQuery query(database);
     if (!query.exec(QStringLiteral("SELECT id, started_at_ms, ended_at_ms, state "
                                    "FROM history_sessions ORDER BY id"))) {
-        setError(error_message, QStringLiteral("读取历史会话失败: %1").arg(query.lastError().text()));
+        setError(error_message,
+                 storeText(QT_TRANSLATE_NOOP("HistoryStore", "读取历史会话失败：%1")).arg(query.lastError().text()));
         return std::nullopt;
     }
 
@@ -338,7 +379,8 @@ std::optional<QVector<HistorySession>> HistoryStore::loadSessions(QString *error
         } else if (state == QStringLiteral("abnormal")) {
             session.state = HistorySessionState::kAbnormal;
         } else {
-            setError(error_message, QStringLiteral("历史会话 %1 的状态无效").arg(session.id));
+            setError(error_message,
+                     storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史会话 %1 的状态无效")).arg(session.id));
             return std::nullopt;
         }
         sessions.append(session);

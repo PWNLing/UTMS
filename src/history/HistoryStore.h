@@ -48,12 +48,12 @@ public:
     HistoryStore &operator=(const HistoryStore &) = delete;
 
     bool initialize(QString *error_message = nullptr);
-    std::optional<HistoryConfiguration> loadConfiguration(QString *error_message = nullptr);
+    std::optional<HistoryConfiguration> loadConfiguration(QString *error_message = nullptr) const;
     bool saveConfiguration(const HistoryConfiguration &configuration, QString *error_message = nullptr);
     std::optional<qint64> startSession(const QDateTime &started_at, QString *error_message = nullptr);
     bool closeActiveSession(const QDateTime &ended_at, QString *error_message = nullptr);
-    bool recoverAbandonedSessions(const QDateTime &recovered_at, QString *error_message = nullptr);
-    std::optional<QVector<HistorySession>> loadSessions(QString *error_message = nullptr);
+    std::optional<int> recoverAbandonedSessions(const QDateTime &recovered_at, QString *error_message = nullptr);
+    std::optional<QVector<HistorySession>> loadSessions(QString *error_message = nullptr) const;
 
 private:
     void close();

@@ -19,6 +19,7 @@ private slots:
     void sessionLifecycleCreatesAndClosesOneDurableRecord();
     void abandonedSessionIsMarkedAbnormalWithoutDataLoss();
     void controllerDegradesSafelyWhenDatabaseIsUnavailable();
+    void controllerRetriesInitializationAfterDatabaseRecovers();
 };
 
 void HistoryStoreTest::freshDatabaseUsesRequiredDefaults()
@@ -140,7 +141,9 @@ void HistoryStoreTest::abandonedSessionIsMarkedAbnormalWithoutDataLoss()
 
     utms::HistoryStore reopened_store(database_path);
     QVERIFY2(reopened_store.initialize(&error), qPrintable(error));
-    QVERIFY2(reopened_store.recoverAbandonedSessions(recovered_at, &error), qPrintable(error));
+    const std::optional<int> recovered_count = reopened_store.recoverAbandonedSessions(recovered_at, &error);
+    QVERIFY2(recovered_count.has_value(), qPrintable(error));
+    QCOMPARE(recovered_count.value(), 1);
     const std::optional<QVector<utms::HistorySession>> sessions = reopened_store.loadSessions(&error);
 
     QVERIFY2(sessions.has_value(), qPrintable(error));
@@ -173,7 +176,37 @@ void HistoryStoreTest::controllerDegradesSafelyWhenDatabaseIsUnavailable()
     QCOMPARE(fallback_configuration.retention_days, 7);
 
     controller.startSession();
-    QCOMPARE(error_spy.count(), 2);
+    QCOMPARE(error_spy.count(), 1);
+}
+
+void HistoryStoreTest::controllerRetriesInitializationAfterDatabaseRecovers()
+{
+    QTemporaryDir temporary_directory;
+    QVERIFY(temporary_directory.isValid());
+    QFile path_blocker(temporary_directory.filePath(QStringLiteral("not-a-directory")));
+    QVERIFY(path_blocker.open(QIODevice::WriteOnly));
+    path_blocker.close();
+    const QString database_path = path_blocker.fileName() + QStringLiteral("/history.sqlite");
+
+    utms::HistoryController controller;
+    QSignalSpy availability_spy(&controller, &utms::HistoryController::availabilityChanged);
+    controller.initialize(database_path);
+    QCOMPARE(availability_spy.count(), 1);
+    QCOMPARE(availability_spy.at(0).at(0).toBool(), false);
+
+    QVERIFY(path_blocker.remove());
+    controller.retryPendingOperations();
+    QCOMPARE(availability_spy.count(), 2);
+    QCOMPARE(availability_spy.at(1).at(0).toBool(), true);
+
+    controller.startSession();
+    utms::HistoryStore verifier(database_path);
+    QString error;
+    QVERIFY2(verifier.initialize(&error), qPrintable(error));
+    const std::optional<QVector<utms::HistorySession>> sessions = verifier.loadSessions(&error);
+    QVERIFY2(sessions.has_value(), qPrintable(error));
+    QCOMPARE(sessions->size(), 1);
+    QCOMPARE(sessions->at(0).state, utms::HistorySessionState::kActive);
 }
 
 QTEST_GUILESS_MAIN(HistoryStoreTest)

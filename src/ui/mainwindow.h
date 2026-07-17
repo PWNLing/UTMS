@@ -62,6 +62,7 @@ private:
     void setupUdpWorker();
     void setupVideoController();
     void requestHistoryShutdown();
+    void updateHistoryStatusLabel(const QString &detail, const QString &color);
     void completeShutdownIfReady();
 
     QSpinBox *port_spin_box_ = nullptr;
