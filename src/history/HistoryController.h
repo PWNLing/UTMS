@@ -27,6 +27,7 @@ public slots:
     void queryHistory(const utms::HistoryQuery &query);
     void exportHistoryCsv(const utms::HistoryExportRequest &request);
     void deleteSession(qint64 session_id);
+    void deleteAllSessions();
     void refreshHistoryInfo();
     void cleanupExpiredHistory();
     void retryPendingOperations();
@@ -40,6 +41,7 @@ signals:
     void queryCompleted(const utms::HistoryQueryResult &result);
     void exportCompleted(const QString &output_path, int record_count);
     void sessionDeleted(qint64 session_id);
+    void allSessionsDeleted(int session_count);
     void databaseSizeChanged(qint64 size_bytes);
     void errorOccurred(const QString &message);
     void stopped();

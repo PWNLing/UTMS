@@ -58,10 +58,13 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
       target_type_combo_box_(new QComboBox(this)), query_button_(new QPushButton(tr("查询"), this)),
       refresh_button_(new QPushButton(tr("刷新会话"), this)),
       delete_session_button_(new QPushButton(tr("删除选中会话"), this)),
+      delete_all_sessions_button_(new QPushButton(tr("删除所有会话"), this)),
       export_query_button_(new QPushButton(tr("导出当前查询"), this)), export_track_combo_box_(new QComboBox(this)),
       export_track_button_(new QPushButton(tr("导出选中航迹"), this)),
       database_size_label_(new QLabel(tr("数据库占用：--"), this)), result_label_(new QLabel(tr("尚未查询"), this)),
       status_label_(new QLabel(tr("历史数据库初始化中"), this)) {
+    delete_session_button_->setObjectName(QStringLiteral("deleteSessionButton"));
+    delete_all_sessions_button_->setObjectName(QStringLiteral("deleteAllSessionsButton"));
     time_range_check_box_->setChecked(true);
     const QDateTime current_time = QDateTime::currentDateTime();
     start_time_edit_->setDateTime(current_time.addDays(-1));
@@ -107,6 +110,7 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
     management_layout->addWidget(database_size_label_);
     management_layout->addStretch();
     management_layout->addWidget(delete_session_button_);
+    management_layout->addWidget(delete_all_sessions_button_);
 
     auto *export_group = new QGroupBox(tr("CSV 导出"), this);
     auto *export_layout = new QGridLayout(export_group);
@@ -129,6 +133,8 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
     connect(query_button_, &QPushButton::clicked, this, &HistoryQueryWidget::handleQueryRequested);
     connect(refresh_button_, &QPushButton::clicked, this, &HistoryQueryWidget::refreshRequested);
     connect(delete_session_button_, &QPushButton::clicked, this, &HistoryQueryWidget::handleDeleteSessionRequested);
+    connect(delete_all_sessions_button_, &QPushButton::clicked, this,
+            &HistoryQueryWidget::handleDeleteAllSessionsRequested);
     connect(export_query_button_, &QPushButton::clicked, this, [this]() { handleExportRequested(false); });
     connect(export_track_button_, &QPushButton::clicked, this, [this]() { handleExportRequested(true); });
     connect(session_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -291,18 +297,30 @@ void HistoryQueryWidget::handleDeleteSessionRequested() {
     }
 }
 
+void HistoryQueryWidget::handleDeleteAllSessionsRequested() {
+    const QMessageBox::StandardButton choice =
+        QMessageBox::question(this, tr("确认删除所有历史会话"),
+                              tr("确定删除全部 %1 个历史会话及其全部采样帧吗？此操作不可撤销。").arg(sessions_.size()),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (choice == QMessageBox::Yes) {
+        emit deleteAllSessionsRequested();
+        showStatus(tr("正在删除所有历史会话…"), false);
+    }
+}
+
 void HistoryQueryWidget::updateSessionActions() {
     bool selected_session_is_deletable = false;
-    if (session_combo_box_->currentData().isValid()) {
-        const qint64 session_id = session_combo_box_->currentData().toLongLong();
-        for (const HistorySession &session : sessions_) {
-            if (session.id == session_id) {
-                selected_session_is_deletable = session.state != HistorySessionState::kActive;
-                break;
-            }
+    bool has_active_session = false;
+    const QVariant selected_session_id = session_combo_box_->currentData();
+    for (const HistorySession &session : sessions_) {
+        if (selected_session_id.isValid() && session.id == selected_session_id.toLongLong()) {
+            selected_session_is_deletable = session.state != HistorySessionState::kActive;
         }
+        has_active_session = has_active_session || session.state == HistorySessionState::kActive;
     }
     delete_session_button_->setEnabled(available_ && selected_session_is_deletable);
+    delete_all_sessions_button_->setEnabled(available_ && !sessions_.isEmpty() && !has_active_session);
+    delete_all_sessions_button_->setToolTip(has_active_session ? tr("请先停止 UDP 监听再删除所有会话") : QString());
 }
 
 } // namespace utms

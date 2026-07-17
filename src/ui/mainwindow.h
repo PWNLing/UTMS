@@ -48,6 +48,7 @@ signals:
     void queryHistoryRequested(const utms::HistoryQuery &query);
     void exportHistoryRequested(const utms::HistoryExportRequest &request);
     void deleteHistorySessionRequested(qint64 session_id);
+    void deleteAllHistorySessionsRequested();
     void refreshHistoryInfoRequested();
     void shutdownHistoryWorkerRequested();
 

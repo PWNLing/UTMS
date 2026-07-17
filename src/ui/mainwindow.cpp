@@ -339,6 +339,8 @@ void MainWindow::setupUi() {
             &MainWindow::exportHistoryRequested);
     connect(history_query_widget_, &utms::HistoryQueryWidget::deleteSessionRequested, this,
             &MainWindow::deleteHistorySessionRequested);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::deleteAllSessionsRequested, this,
+            &MainWindow::deleteAllHistorySessionsRequested);
     connect(history_query_widget_, &utms::HistoryQueryWidget::refreshRequested, this,
             &MainWindow::refreshHistoryInfoRequested);
 
@@ -432,6 +434,8 @@ void MainWindow::setupHistoryController() {
     connect(this, &MainWindow::exportHistoryRequested, history_controller_, &utms::HistoryController::exportHistoryCsv);
     connect(this, &MainWindow::deleteHistorySessionRequested, history_controller_,
             &utms::HistoryController::deleteSession);
+    connect(this, &MainWindow::deleteAllHistorySessionsRequested, history_controller_,
+            &utms::HistoryController::deleteAllSessions);
     connect(this, &MainWindow::refreshHistoryInfoRequested, history_controller_,
             &utms::HistoryController::refreshHistoryInfo);
     connect(this, &MainWindow::shutdownHistoryWorkerRequested, history_controller_, &utms::HistoryController::shutdown);
@@ -451,6 +455,9 @@ void MainWindow::setupHistoryController() {
             &MainWindow::handleHistoryDatabaseSizeChanged);
     connect(history_controller_, &utms::HistoryController::sessionDeleted, this, [this](qint64 session_id) {
         history_query_widget_->showStatus(tr("历史会话 #%1 已删除").arg(session_id), false);
+    });
+    connect(history_controller_, &utms::HistoryController::allSessionsDeleted, this, [this](int session_count) {
+        history_query_widget_->showStatus(tr("已删除全部 %1 个历史会话").arg(session_count), false);
     });
     connect(history_controller_, &utms::HistoryController::errorOccurred, this, &MainWindow::handleHistoryError);
     connect(history_thread_, &QThread::finished, history_controller_, &QObject::deleteLater);

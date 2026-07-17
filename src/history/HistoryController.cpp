@@ -158,6 +158,24 @@ void HistoryController::deleteSession(qint64 session_id) {
     refreshHistoryInfo();
 }
 
+void HistoryController::deleteAllSessions() {
+    if (shutting_down_ || store_ == nullptr) {
+        reportError(tr("历史数据库不可用，无法删除全部会话"));
+        return;
+    }
+
+    QString error;
+    const std::optional<int> deleted_count = store_->deleteAllSessions(&error);
+    if (!deleted_count.has_value()) {
+        reportError(error);
+        return;
+    }
+
+    qInfo() << "HistoryController: deleted all history sessions" << deleted_count.value();
+    emit allSessionsDeleted(deleted_count.value());
+    refreshHistoryInfo();
+}
+
 void HistoryController::refreshHistoryInfo() {
     if (shutting_down_ || store_ == nullptr) {
         return;

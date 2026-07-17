@@ -29,6 +29,7 @@ public:
                                  const QString &output_path, QString *error_message = nullptr) const;
     std::optional<int> cleanupExpiredHistory(const QDateTime &cutoff, QString *error_message = nullptr);
     bool deleteSession(qint64 session_id, QString *error_message = nullptr);
+    std::optional<int> deleteAllSessions(QString *error_message = nullptr);
     bool probeWriteAccess(QString *error_message = nullptr);
     qint64 databaseSizeBytes() const;
 

@@ -31,12 +31,14 @@ signals:
     void queryRequested(const utms::HistoryQuery &query);
     void exportRequested(const utms::HistoryExportRequest &request);
     void deleteSessionRequested(qint64 session_id);
+    void deleteAllSessionsRequested();
     void refreshRequested();
 
 private:
     void handleQueryRequested();
     void handleExportRequested(bool selected_track_only);
     void handleDeleteSessionRequested();
+    void handleDeleteAllSessionsRequested();
     void updateSessionActions();
 
     QCheckBox *time_range_check_box_ = nullptr;
@@ -48,6 +50,7 @@ private:
     QPushButton *query_button_ = nullptr;
     QPushButton *refresh_button_ = nullptr;
     QPushButton *delete_session_button_ = nullptr;
+    QPushButton *delete_all_sessions_button_ = nullptr;
     QPushButton *export_query_button_ = nullptr;
     QComboBox *export_track_combo_box_ = nullptr;
     QPushButton *export_track_button_ = nullptr;

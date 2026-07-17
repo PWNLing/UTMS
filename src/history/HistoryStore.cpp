@@ -714,6 +714,56 @@ bool HistoryStore::deleteSession(qint64 session_id, QString *error_message) {
     return true;
 }
 
+std::optional<int> HistoryStore::deleteAllSessions(QString *error_message) {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return std::nullopt;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    if (!database.transaction()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "开始删除全部历史会话失败：%1"))
+                                    .arg(database.lastError().text()));
+        return std::nullopt;
+    }
+
+    QSqlQuery active_session_query(database);
+    if (!active_session_query.exec(QStringLiteral("SELECT COUNT(*) FROM history_sessions WHERE state = 'active'")) ||
+        !active_session_query.next()) {
+        const QString operation_error = storeText(QT_TRANSLATE_NOOP("HistoryStore", "检查活动历史会话失败：%1"))
+                                            .arg(active_session_query.lastError().text());
+        setTransactionError(database, error_message, operation_error);
+        return std::nullopt;
+    }
+    if (active_session_query.value(0).toLongLong() > 0) {
+        setTransactionError(
+            database, error_message,
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "仍有会话正在记录，请先停止 UDP 监听再删除全部会话")));
+        return std::nullopt;
+    }
+
+    QSqlQuery delete_query(database);
+    if (!delete_query.exec(QStringLiteral("DELETE FROM history_sessions"))) {
+        const QString operation_error = storeText(QT_TRANSLATE_NOOP("HistoryStore", "删除全部历史会话失败：%1"))
+                                            .arg(delete_query.lastError().text());
+        setTransactionError(database, error_message, operation_error);
+        return std::nullopt;
+    }
+    const qint64 deleted_count = delete_query.numRowsAffected();
+    if (deleted_count < 0 || deleted_count > std::numeric_limits<int>::max()) {
+        setTransactionError(database, error_message,
+                            storeText(QT_TRANSLATE_NOOP("HistoryStore", "无法确定已删除的历史会话数量")));
+        return std::nullopt;
+    }
+    if (!database.commit()) {
+        const QString operation_error = storeText(QT_TRANSLATE_NOOP("HistoryStore", "提交全部历史会话删除失败：%1"))
+                                            .arg(database.lastError().text());
+        setTransactionError(database, error_message, operation_error);
+        return std::nullopt;
+    }
+    return static_cast<int>(deleted_count);
+}
+
 bool HistoryStore::probeWriteAccess(QString *error_message) {
     if (!initialized_) {
         setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));

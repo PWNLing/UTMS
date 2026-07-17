@@ -55,6 +55,7 @@ private slots:
     void batchWritesRollbackAtomically();
     void csvExportIsLimitedToTheQueryOrSelectedTrack();
     void retentionDeletionAndDatabaseSizeManageStoredHistory();
+    void deleteAllSessionsRequiresNoActiveSessionAndDeletesCascade();
     void controllerSamplesAcceptedFramesWithoutThrottlingTheCaller();
     void controllerDropsOutageFramesAndRecordsOnlyNewFramesAfterRecovery();
     void sessionLifecycleCreatesAndClosesOneDurableRecord();
@@ -357,6 +358,53 @@ void HistoryStoreTest::retentionDeletionAndDatabaseSizeManageStoredHistory() {
     QCOMPARE(sessions->size(), 1);
     QCOMPARE(sessions->at(0).id, active_session_id.value());
     QVERIFY(store.databaseSizeBytes() > 0);
+}
+
+void HistoryStoreTest::deleteAllSessionsRequiresNoActiveSessionAndDeletesCascade() {
+    QTemporaryDir temporary_directory;
+    QVERIFY(temporary_directory.isValid());
+
+    utms::HistoryStore store(temporary_directory.filePath(QStringLiteral("history.sqlite")));
+    QString error;
+    QVERIFY2(store.initialize(&error), qPrintable(error));
+
+    const std::optional<qint64> first_session_id =
+        store.startSession(QDateTime::fromMSecsSinceEpoch(1'000, QTimeZone::UTC), &error);
+    QVERIFY2(first_session_id.has_value(), qPrintable(error));
+    QVERIFY2(store.appendFrame(first_session_id.value(),
+                               makeHistoryFrame(2'000, 1, {makeHistoryTrack(901, utms::TargetType::kCar, 25.1, 110.1)}),
+                               &error),
+             qPrintable(error));
+    QVERIFY2(store.closeActiveSession(QDateTime::fromMSecsSinceEpoch(3'000, QTimeZone::UTC), &error),
+             qPrintable(error));
+
+    const std::optional<qint64> second_session_id =
+        store.startSession(QDateTime::fromMSecsSinceEpoch(4'000, QTimeZone::UTC), &error);
+    QVERIFY2(second_session_id.has_value(), qPrintable(error));
+    QVERIFY2(store.appendFrame(
+                 second_session_id.value(),
+                 makeHistoryFrame(5'000, 2, {makeHistoryTrack(902, utms::TargetType::kTruck, 25.2, 110.2)}), &error),
+             qPrintable(error));
+
+    const std::optional<int> rejected_count = store.deleteAllSessions(&error);
+    QVERIFY(!rejected_count.has_value());
+    QVERIFY(error.contains(QStringLiteral("正在记录")));
+    std::optional<QVector<utms::HistorySession>> sessions = store.loadSessions(&error);
+    QVERIFY2(sessions.has_value(), qPrintable(error));
+    QCOMPARE(sessions->size(), 2);
+
+    QVERIFY2(store.closeActiveSession(QDateTime::fromMSecsSinceEpoch(6'000, QTimeZone::UTC), &error),
+             qPrintable(error));
+    const std::optional<int> deleted_count = store.deleteAllSessions(&error);
+    QVERIFY2(deleted_count.has_value(), qPrintable(error));
+    QCOMPARE(deleted_count.value(), 2);
+
+    sessions = store.loadSessions(&error);
+    QVERIFY2(sessions.has_value(), qPrintable(error));
+    QVERIFY(sessions->isEmpty());
+    const std::optional<utms::HistoryQueryResult> history = store.queryHistory({}, &error);
+    QVERIFY2(history.has_value(), qPrintable(error));
+    QVERIFY(history->frames.isEmpty());
 }
 
 void HistoryStoreTest::controllerSamplesAcceptedFramesWithoutThrottlingTheCaller() {
