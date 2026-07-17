@@ -1,45 +1,13 @@
 #pragma once
 
-#include <optional>
-
-#include <QDateTime>
-#include <QMetaType>
 #include <QString>
 #include <QVector>
 
+#include "history/HistoryTypes.h"
+
 namespace utms {
 
-enum class HistorySamplingRate
-{
-    kEveryFrame,
-    kOneFps,
-    kTwoFps,
-    kFiveFps
-};
-
-struct HistoryConfiguration
-{
-    HistorySamplingRate sampling_rate = HistorySamplingRate::kTwoFps;
-    int retention_days = 7;
-};
-
-enum class HistorySessionState
-{
-    kActive,
-    kClosed,
-    kAbnormal
-};
-
-struct HistorySession
-{
-    qint64 id = 0;
-    QDateTime started_at;
-    std::optional<QDateTime> ended_at;
-    HistorySessionState state = HistorySessionState::kActive;
-};
-
-class HistoryStore
-{
+class HistoryStore {
 public:
     explicit HistoryStore(const QString &database_path);
     ~HistoryStore();
@@ -54,6 +22,15 @@ public:
     bool closeActiveSession(const QDateTime &ended_at, QString *error_message = nullptr);
     std::optional<int> recoverAbandonedSessions(const QDateTime &recovered_at, QString *error_message = nullptr);
     std::optional<QVector<HistorySession>> loadSessions(QString *error_message = nullptr) const;
+    bool appendFrame(qint64 session_id, const RadarFrame &frame, QString *error_message = nullptr);
+    bool appendFrames(qint64 session_id, const QVector<RadarFrame> &frames, QString *error_message = nullptr);
+    std::optional<HistoryQueryResult> queryHistory(const HistoryQuery &query, QString *error_message = nullptr) const;
+    std::optional<int> exportCsv(const HistoryQuery &query, std::optional<qint64> selected_track_id,
+                                 const QString &output_path, QString *error_message = nullptr) const;
+    std::optional<int> cleanupExpiredHistory(const QDateTime &cutoff, QString *error_message = nullptr);
+    bool deleteSession(qint64 session_id, QString *error_message = nullptr);
+    bool probeWriteAccess(QString *error_message = nullptr);
+    qint64 databaseSizeBytes() const;
 
 private:
     void close();
@@ -64,7 +41,3 @@ private:
 };
 
 } // namespace utms
-
-Q_DECLARE_METATYPE(utms::HistorySamplingRate)
-Q_DECLARE_METATYPE(utms::HistoryConfiguration)
-Q_DECLARE_METATYPE(utms::HistorySessionState)

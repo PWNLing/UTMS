@@ -2,8 +2,8 @@
 
 #include <optional>
 
-#include <QCloseEvent>
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
@@ -28,14 +28,14 @@
 #include "media/RtspController.h"
 #include "network/UdpReceiver.h"
 #include "ui/BottomStatusBar.h"
+#include "ui/HistoryQueryWidget.h"
 #include "ui/MapPanel.h"
 #include "ui/StatisticsWidget.h"
 #include "ui/SystemMonitorWidget.h"
 #include "ui/VideoStreamWidget.h"
 #include "workbench/TrackTableWidget.h"
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
-{
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     qRegisterMetaType<utms::RadarFrame>();
     qRegisterMetaType<utms::UdpStatus>();
     qRegisterMetaType<utms::RtspConnectionState>();
@@ -47,8 +47,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     setupVideoController();
 }
 
-MainWindow::~MainWindow()
-{
+MainWindow::~MainWindow() {
     if (udp_thread_ != nullptr && udp_thread_->isRunning()) {
         connect(udp_thread_, &QThread::finished, udp_thread_, &QObject::deleteLater);
         udp_thread_->setParent(nullptr);
@@ -61,8 +60,7 @@ MainWindow::~MainWindow()
     }
 }
 
-void MainWindow::closeEvent(QCloseEvent *event)
-{
+void MainWindow::closeEvent(QCloseEvent *event) {
     const bool udp_stopped = udp_shutdown_complete_ || udp_thread_ == nullptr || !udp_thread_->isRunning();
     const bool history_stopped =
         history_shutdown_complete_ || history_thread_ == nullptr || !history_thread_->isRunning();
@@ -98,36 +96,31 @@ void MainWindow::closeEvent(QCloseEvent *event)
     }
 }
 
-void MainWindow::handleUdpWorkerStopped()
-{
+void MainWindow::handleUdpWorkerStopped() {
     if (shutdown_started_ && udp_thread_ != nullptr) {
         udp_thread_->quit();
         requestHistoryShutdown();
     }
 }
 
-void MainWindow::handleVideoWorkerStopped()
-{
+void MainWindow::handleVideoWorkerStopped() {
     video_shutdown_complete_ = true;
     completeShutdownIfReady();
 }
 
-void MainWindow::handleSystemMonitorStopped()
-{
+void MainWindow::handleSystemMonitorStopped() {
     monitor_shutdown_complete_ = true;
     completeShutdownIfReady();
 }
 
-void MainWindow::completeShutdownIfReady()
-{
+void MainWindow::completeShutdownIfReady() {
     if (shutdown_started_ && udp_shutdown_complete_ && history_shutdown_complete_ && video_shutdown_complete_ &&
         monitor_shutdown_complete_) {
         close();
     }
 }
 
-void MainWindow::handleUdpStatusChanged(utms::UdpStatus status, const QString &detail)
-{
+void MainWindow::handleUdpStatusChanged(utms::UdpStatus status, const QString &detail) {
     const bool listening = status != utms::UdpStatus::kStopped;
     if (!udp_listening_ && listening) {
         emit startHistorySessionRequested();
@@ -157,8 +150,7 @@ void MainWindow::handleUdpStatusChanged(utms::UdpStatus status, const QString &d
     bottom_status_bar_->setUdpStatus(status);
 }
 
-void MainWindow::handleHistoryConfigurationLoaded(const utms::HistoryConfiguration &configuration)
-{
+void MainWindow::handleHistoryConfigurationLoaded(const utms::HistoryConfiguration &configuration) {
     const QSignalBlocker sampling_blocker(history_sampling_combo_box_);
     const QSignalBlocker retention_blocker(history_retention_spin_box_);
     const int sampling_index = history_sampling_combo_box_->findData(static_cast<int>(configuration.sampling_rate));
@@ -168,33 +160,48 @@ void MainWindow::handleHistoryConfigurationLoaded(const utms::HistoryConfigurati
     history_retention_spin_box_->setValue(configuration.retention_days);
 }
 
-void MainWindow::handleHistoryAvailabilityChanged(bool available, const QString &detail)
-{
+void MainWindow::handleHistoryAvailabilityChanged(bool available, const QString &detail) {
     const QString color = available ? QStringLiteral("#208a4b") : QStringLiteral("#c0392b");
     updateHistoryStatusLabel(detail, color);
+    history_query_widget_->setAvailable(available);
+    history_query_widget_->showStatus(detail, !available);
 }
 
-void MainWindow::handleHistorySessionActiveChanged(bool active, const QString &detail)
-{
+void MainWindow::handleHistorySessionActiveChanged(bool active, const QString &detail) {
     const QString color = active ? QStringLiteral("#208a4b") : QStringLiteral("#555555");
     updateHistoryStatusLabel(detail, color);
 }
 
-void MainWindow::handleHistoryError(const QString &message)
-{
-    handleHistoryAvailabilityChanged(false, tr("历史记录错误：%1").arg(message));
+void MainWindow::handleHistoryError(const QString &message) {
+    const QString detail = tr("历史记录错误：%1").arg(message);
+    updateHistoryStatusLabel(detail, QStringLiteral("#c0392b"));
+    history_query_widget_->showStatus(detail, true);
 }
 
-void MainWindow::updateCurrentFrame(const utms::RadarFrame &frame)
-{
+void MainWindow::handleHistorySessionsLoaded(const QVector<utms::HistorySession> &sessions) {
+    history_query_widget_->setSessions(sessions);
+}
+
+void MainWindow::handleHistoryQueryCompleted(const utms::HistoryQueryResult &result) {
+    history_query_widget_->applyQueryResult(result);
+}
+
+void MainWindow::handleHistoryExportCompleted(const QString &output_path, int record_count) {
+    history_query_widget_->showExportCompleted(output_path, record_count);
+}
+
+void MainWindow::handleHistoryDatabaseSizeChanged(qint64 size_bytes) {
+    history_query_widget_->setDatabaseSizeBytes(size_bytes);
+}
+
+void MainWindow::updateCurrentFrame(const utms::RadarFrame &frame) {
     map_panel_->setFrame(frame);
     track_table_->replaceTracks(frame.tracks);
     statistics_widget_->updateStatistics(frame.statistics);
     bottom_status_bar_->updateStatistics(frame.statistics);
 }
 
-void MainWindow::setupUi()
-{
+void MainWindow::setupUi() {
     setWindowTitle(tr("GUET-UTMS 实时雷达显示"));
     resize(1400, 800);
     setMinimumSize(800, 500);
@@ -289,14 +296,13 @@ void MainWindow::setupUi()
     auto *trajectory_group = new QGroupBox(tr("实时短航迹"), system_config_widget);
     auto *trajectory_layout = new QHBoxLayout(trajectory_group);
     auto *trajectory_duration_combo_box = new QComboBox(trajectory_group);
-    trajectory_duration_combo_box->addItem(
-        tr("关闭"), static_cast<int>(utms::RealtimeTrajectoryDuration::kOff));
-    trajectory_duration_combo_box->addItem(
-        tr("10 秒"), static_cast<int>(utms::RealtimeTrajectoryDuration::kTenSeconds));
-    trajectory_duration_combo_box->addItem(
-        tr("30 秒"), static_cast<int>(utms::RealtimeTrajectoryDuration::kThirtySeconds));
-    trajectory_duration_combo_box->addItem(
-        tr("1 分钟"), static_cast<int>(utms::RealtimeTrajectoryDuration::kOneMinute));
+    trajectory_duration_combo_box->addItem(tr("关闭"), static_cast<int>(utms::RealtimeTrajectoryDuration::kOff));
+    trajectory_duration_combo_box->addItem(tr("10 秒"),
+                                           static_cast<int>(utms::RealtimeTrajectoryDuration::kTenSeconds));
+    trajectory_duration_combo_box->addItem(tr("30 秒"),
+                                           static_cast<int>(utms::RealtimeTrajectoryDuration::kThirtySeconds));
+    trajectory_duration_combo_box->addItem(tr("1 分钟"),
+                                           static_cast<int>(utms::RealtimeTrajectoryDuration::kOneMinute));
     trajectory_duration_combo_box->setCurrentIndex(2);
     auto *show_all_trajectories_check_box = new QCheckBox(tr("显示所有目标航迹"), trajectory_group);
     trajectory_layout->addWidget(new QLabel(tr("显示时长"), trajectory_group));
@@ -325,6 +331,16 @@ void MainWindow::setupUi()
     system_monitor_widget_ = new utms::SystemMonitorWidget(configuration_tabs);
     configuration_tabs->addTab(system_monitor_widget_, tr("系统监控"));
     connect(system_monitor_widget_, &utms::SystemMonitorWidget::stopped, this, &MainWindow::handleSystemMonitorStopped);
+
+    history_query_widget_ = new utms::HistoryQueryWidget(configuration_tabs);
+    configuration_tabs->addTab(history_query_widget_, tr("历史回放"));
+    connect(history_query_widget_, &utms::HistoryQueryWidget::queryRequested, this, &MainWindow::queryHistoryRequested);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::exportRequested, this,
+            &MainWindow::exportHistoryRequested);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::deleteSessionRequested, this,
+            &MainWindow::deleteHistorySessionRequested);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::refreshRequested, this,
+            &MainWindow::refreshHistoryInfoRequested);
 
     data_splitter->addWidget(track_table_);
     data_splitter->addWidget(configuration_tabs);
@@ -373,8 +389,7 @@ void MainWindow::setupUi()
                 map_panel_->setTrajectoryDuration(static_cast<utms::RealtimeTrajectoryDuration>(
                     trajectory_duration_combo_box->itemData(index).toInt()));
             });
-    connect(show_all_trajectories_check_box, &QCheckBox::toggled, map_panel_,
-            &utms::MapPanel::setShowAllTrajectories);
+    connect(show_all_trajectories_check_box, &QCheckBox::toggled, map_panel_, &utms::MapPanel::setShowAllTrajectories);
     connect(locate_radar_button_, &QPushButton::clicked, this, [this]() { map_panel_->locateRadar(); });
     connect(locate_position_button, &QPushButton::clicked, this,
             [this]() { map_panel_->setCenter({latitude_spin_box_->value(), longitude_spin_box_->value()}); });
@@ -389,13 +404,11 @@ void MainWindow::setupUi()
             qWarning() << "MainWindow: failed to select map track in table" << track_id;
         }
     });
-    connect(track_table_, &utms::TrackTableWidget::targetSelectionCleared, this, [this]() {
-        map_panel_->clearSelectionForMissingTarget();
-    });
+    connect(track_table_, &utms::TrackTableWidget::targetSelectionCleared, this,
+            [this]() { map_panel_->clearSelectionForMissingTarget(); });
 }
 
-void MainWindow::setupHistoryController()
-{
+void MainWindow::setupHistoryController() {
     history_thread_ = new QThread(this);
     history_controller_ = new utms::HistoryController();
     if (!history_controller_->moveToThread(history_thread_)) {
@@ -415,6 +428,12 @@ void MainWindow::setupHistoryController()
     connect(this, &MainWindow::stopHistorySessionRequested, history_controller_, &utms::HistoryController::stopSession);
     connect(this, &MainWindow::saveHistoryConfigurationRequested, history_controller_,
             &utms::HistoryController::saveConfiguration);
+    connect(this, &MainWindow::queryHistoryRequested, history_controller_, &utms::HistoryController::queryHistory);
+    connect(this, &MainWindow::exportHistoryRequested, history_controller_, &utms::HistoryController::exportHistoryCsv);
+    connect(this, &MainWindow::deleteHistorySessionRequested, history_controller_,
+            &utms::HistoryController::deleteSession);
+    connect(this, &MainWindow::refreshHistoryInfoRequested, history_controller_,
+            &utms::HistoryController::refreshHistoryInfo);
     connect(this, &MainWindow::shutdownHistoryWorkerRequested, history_controller_, &utms::HistoryController::shutdown);
     connect(history_controller_, &utms::HistoryController::configurationLoaded, this,
             &MainWindow::handleHistoryConfigurationLoaded);
@@ -422,6 +441,17 @@ void MainWindow::setupHistoryController()
             &MainWindow::handleHistoryAvailabilityChanged);
     connect(history_controller_, &utms::HistoryController::sessionActiveChanged, this,
             &MainWindow::handleHistorySessionActiveChanged);
+    connect(history_controller_, &utms::HistoryController::sessionsLoaded, this,
+            &MainWindow::handleHistorySessionsLoaded);
+    connect(history_controller_, &utms::HistoryController::queryCompleted, this,
+            &MainWindow::handleHistoryQueryCompleted);
+    connect(history_controller_, &utms::HistoryController::exportCompleted, this,
+            &MainWindow::handleHistoryExportCompleted);
+    connect(history_controller_, &utms::HistoryController::databaseSizeChanged, this,
+            &MainWindow::handleHistoryDatabaseSizeChanged);
+    connect(history_controller_, &utms::HistoryController::sessionDeleted, this, [this](qint64 session_id) {
+        history_query_widget_->showStatus(tr("历史会话 #%1 已删除").arg(session_id), false);
+    });
     connect(history_controller_, &utms::HistoryController::errorOccurred, this, &MainWindow::handleHistoryError);
     connect(history_thread_, &QThread::finished, history_controller_, &QObject::deleteLater);
     connect(history_thread_, &QThread::finished, this, [this]() {
@@ -432,8 +462,7 @@ void MainWindow::setupHistoryController()
     history_thread_->start();
 }
 
-void MainWindow::setupUdpWorker()
-{
+void MainWindow::setupUdpWorker() {
     udp_thread_ = new QThread(this);
     udp_receiver_ = new utms::UdpReceiver();
     if (!udp_receiver_->moveToThread(udp_thread_)) {
@@ -449,6 +478,10 @@ void MainWindow::setupUdpWorker()
     connect(this, &MainWindow::shutdownUdpWorkerRequested, udp_receiver_, &utms::UdpReceiver::shutdown);
     connect(udp_receiver_, &utms::UdpReceiver::statusChanged, this, &MainWindow::handleUdpStatusChanged);
     connect(udp_receiver_, &utms::UdpReceiver::frameReceived, this, &MainWindow::updateCurrentFrame);
+    if (history_controller_ != nullptr) {
+        connect(udp_receiver_, &utms::UdpReceiver::frameReceived, history_controller_,
+                &utms::HistoryController::recordAcceptedFrame);
+    }
     connect(udp_receiver_, &utms::UdpReceiver::stopped, this, &MainWindow::handleUdpWorkerStopped);
     connect(udp_thread_, &QThread::finished, udp_receiver_, &QObject::deleteLater);
     connect(udp_thread_, &QThread::finished, this, [this]() {
@@ -459,8 +492,7 @@ void MainWindow::setupUdpWorker()
     udp_thread_->start();
 }
 
-void MainWindow::requestHistoryShutdown()
-{
+void MainWindow::requestHistoryShutdown() {
     if (history_shutdown_requested_) {
         return;
     }
@@ -474,14 +506,12 @@ void MainWindow::requestHistoryShutdown()
     }
 }
 
-void MainWindow::updateHistoryStatusLabel(const QString &detail, const QString &color)
-{
+void MainWindow::updateHistoryStatusLabel(const QString &detail, const QString &color) {
     history_status_label_->setText(detail);
     history_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
 }
 
-void MainWindow::setupVideoController()
-{
+void MainWindow::setupVideoController() {
     rtsp_controller_ = new utms::RtspController(this);
     connect(video_stream_widget_, &utms::VideoStreamWidget::connectRequested, rtsp_controller_,
             &utms::RtspController::connectToStream);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QVector>
 
 class QCloseEvent;
 class QComboBox;
@@ -20,13 +21,17 @@ class RtspController;
 class VideoStreamWidget;
 class UdpReceiver;
 class HistoryController;
+class HistoryQueryWidget;
 enum class UdpStatus;
 struct HistoryConfiguration;
+struct HistoryExportRequest;
+struct HistoryQuery;
+struct HistoryQueryResult;
+struct HistorySession;
 struct RadarFrame;
 } // namespace utms
 
-class MainWindow : public QMainWindow
-{
+class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
@@ -40,6 +45,10 @@ signals:
     void startHistorySessionRequested();
     void stopHistorySessionRequested();
     void saveHistoryConfigurationRequested(const utms::HistoryConfiguration &configuration);
+    void queryHistoryRequested(const utms::HistoryQuery &query);
+    void exportHistoryRequested(const utms::HistoryExportRequest &request);
+    void deleteHistorySessionRequested(qint64 session_id);
+    void refreshHistoryInfoRequested();
     void shutdownHistoryWorkerRequested();
 
 protected:
@@ -54,6 +63,10 @@ private slots:
     void handleHistoryAvailabilityChanged(bool available, const QString &detail);
     void handleHistorySessionActiveChanged(bool active, const QString &detail);
     void handleHistoryError(const QString &message);
+    void handleHistorySessionsLoaded(const QVector<utms::HistorySession> &sessions);
+    void handleHistoryQueryCompleted(const utms::HistoryQueryResult &result);
+    void handleHistoryExportCompleted(const QString &output_path, int record_count);
+    void handleHistoryDatabaseSizeChanged(qint64 size_bytes);
     void updateCurrentFrame(const utms::RadarFrame &frame);
 
 private:
@@ -72,6 +85,7 @@ private:
     QComboBox *history_sampling_combo_box_ = nullptr;
     QSpinBox *history_retention_spin_box_ = nullptr;
     QLabel *history_status_label_ = nullptr;
+    utms::HistoryQueryWidget *history_query_widget_ = nullptr;
     utms::TrackTableWidget *track_table_ = nullptr;
     utms::MapPanel *map_panel_ = nullptr;
     QComboBox *map_mode_combo_box_ = nullptr;

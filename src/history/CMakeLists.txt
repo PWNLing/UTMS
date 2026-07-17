@@ -3,8 +3,13 @@ set(PROJECT_HISTORY_TARGET "${PROJECT_NAME}_history")
 add_library(${PROJECT_HISTORY_TARGET} STATIC
     HistoryController.cpp
     HistoryController.h
+    HistoryCsvExporter.cpp
+    HistoryCsvExporter.h
+    HistorySamplingPolicy.cpp
+    HistorySamplingPolicy.h
     HistoryStore.cpp
     HistoryStore.h
+    HistoryTypes.h
 )
 
 add_library(${PROJECT_NAMESPACE}::history ALIAS ${PROJECT_HISTORY_TARGET})
@@ -16,6 +21,7 @@ target_include_directories(${PROJECT_HISTORY_TARGET}
 
 target_link_libraries(${PROJECT_HISTORY_TARGET}
     PUBLIC
+        ${PROJECT_NAMESPACE}::core
         Qt${QT_VERSION_MAJOR}::Core
         Qt${QT_VERSION_MAJOR}::Sql
 )
