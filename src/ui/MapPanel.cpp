@@ -2,7 +2,9 @@
 
 #include <algorithm>
 
+#include <QDateTime>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include "map/OnlineMapState.h"
@@ -13,8 +15,8 @@ namespace utms
 {
 
 MapPanel::MapPanel(QWidget *parent)
-    : QWidget(parent), map_stack_(new QStackedWidget(this)), online_map_(new OnlineMapWidget(map_stack_)),
-      offline_map_(new OfflineMapWidget(map_stack_))
+    : QWidget(parent), map_stack_(new QStackedWidget(this)), trajectory_refresh_timer_(new QTimer(this)),
+      online_map_(new OnlineMapWidget(map_stack_)), offline_map_(new OfflineMapWidget(map_stack_))
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -27,12 +29,18 @@ MapPanel::MapPanel(QWidget *parent)
     connect(offline_map_, &OfflineMapWidget::targetClicked, this, &MapPanel::handleTargetClicked);
     connect(online_map_, &OnlineMapWidget::viewChanged, this, &MapPanel::handleOnlineViewChanged);
     connect(offline_map_, &OfflineMapWidget::viewChanged, this, &MapPanel::handleOfflineViewChanged);
+    trajectory_refresh_timer_->setInterval(500);
+    connect(trajectory_refresh_timer_, &QTimer::timeout, this,
+            [this]() { renderTrajectories(QDateTime::currentDateTime()); });
+    trajectory_refresh_timer_->start();
 }
 
 void MapPanel::setFrame(const RadarFrame &frame)
 {
+    trajectory_model_.replaceFrame(frame);
     const std::optional<qint64> previous_selection = state_.selectedTrackId();
     const OnlineMapUpdate update = state_.replaceFrame(frame);
+    const QDateTime render_time = frame.received_at.isValid() ? frame.received_at : QDateTime::currentDateTime();
     if (map_mode_ == MapMode::kOnline)
     {
         online_map_->renderFrame(state_, update);
@@ -40,6 +48,7 @@ void MapPanel::setFrame(const RadarFrame &frame)
         {
             online_map_->setSelectedTrackId(state_.selectedTrackId());
         }
+        renderTrajectories(render_time);
         return;
     }
 
@@ -48,6 +57,7 @@ void MapPanel::setFrame(const RadarFrame &frame)
     {
         offline_map_->setView(state_.center(), state_.zoom());
     }
+    renderTrajectories(render_time);
 }
 
 void MapPanel::setMapMode(MapMode mode)
@@ -70,12 +80,25 @@ void MapPanel::setCenter(const GeoPosition &center)
     applyViewToActiveMap();
 }
 
+void MapPanel::setTrajectoryDuration(RealtimeTrajectoryDuration duration)
+{
+    trajectory_model_.setDuration(duration);
+    renderTrajectories(QDateTime::currentDateTime());
+}
+
+void MapPanel::setShowAllTrajectories(bool show_all_trajectories)
+{
+    trajectory_model_.setShowAllTargets(show_all_trajectories);
+    renderTrajectories(QDateTime::currentDateTime());
+}
+
 bool MapPanel::setSelectedTrackId(std::optional<qint64> track_id)
 {
     if (!state_.setSelectedTrackId(track_id))
     {
         return false;
     }
+    trajectory_model_.setSelectedTrackId(track_id);
     if (map_mode_ == MapMode::kOnline)
     {
         online_map_->setSelectedTrackId(track_id);
@@ -84,7 +107,23 @@ bool MapPanel::setSelectedTrackId(std::optional<qint64> track_id)
     {
         offline_map_->setSelectedTrackId(track_id);
     }
+    renderTrajectories(QDateTime::currentDateTime());
     return true;
+}
+
+void MapPanel::clearSelectionForMissingTarget()
+{
+    state_.setSelectedTrackId(std::nullopt);
+    trajectory_model_.clearSelectionRetainingFocusedTrajectory(QDateTime::currentDateTime());
+    if (map_mode_ == MapMode::kOnline)
+    {
+        online_map_->setSelectedTrackId(std::nullopt);
+    }
+    else
+    {
+        offline_map_->setSelectedTrackId(std::nullopt);
+    }
+    renderTrajectories(QDateTime::currentDateTime());
 }
 
 bool MapPanel::selectTarget(qint64 track_id, bool center_on_target)
@@ -139,6 +178,11 @@ std::optional<qint64> MapPanel::selectedTrackId() const
     return state_.selectedTrackId();
 }
 
+QVector<RealtimeTrajectory> MapPanel::realtimeTrajectories(const QDateTime &now) const
+{
+    return trajectory_model_.visibleTrajectories(now);
+}
+
 void MapPanel::handleTargetClicked(qint64 track_id)
 {
     if (setSelectedTrackId(track_id))
@@ -179,6 +223,19 @@ void MapPanel::applyViewToActiveMap()
     }
 }
 
+void MapPanel::renderTrajectories(const QDateTime &now)
+{
+    const QVector<RealtimeTrajectory> trajectories = trajectory_model_.visibleTrajectories(now);
+    if (map_mode_ == MapMode::kOnline)
+    {
+        online_map_->setTrajectories(trajectories);
+    }
+    else
+    {
+        offline_map_->setTrajectories(trajectories);
+    }
+}
+
 void MapPanel::synchronizeActiveMap()
 {
     if (map_mode_ == MapMode::kOnline)
@@ -192,6 +249,7 @@ void MapPanel::synchronizeActiveMap()
         offline_map_->renderState(state_);
     }
     applyViewToActiveMap();
+    renderTrajectories(QDateTime::currentDateTime());
 }
 
 } // namespace utms

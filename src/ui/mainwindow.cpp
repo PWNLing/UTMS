@@ -3,6 +3,7 @@
 #include <optional>
 
 #include <QCloseEvent>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
@@ -285,6 +286,25 @@ void MainWindow::setupUi()
     map_display_layout->addWidget(map_layer_combo_box_);
     map_display_layout->addStretch();
 
+    auto *trajectory_group = new QGroupBox(tr("实时短航迹"), system_config_widget);
+    auto *trajectory_layout = new QHBoxLayout(trajectory_group);
+    auto *trajectory_duration_combo_box = new QComboBox(trajectory_group);
+    trajectory_duration_combo_box->addItem(
+        tr("关闭"), static_cast<int>(utms::RealtimeTrajectoryDuration::kOff));
+    trajectory_duration_combo_box->addItem(
+        tr("10 秒"), static_cast<int>(utms::RealtimeTrajectoryDuration::kTenSeconds));
+    trajectory_duration_combo_box->addItem(
+        tr("30 秒"), static_cast<int>(utms::RealtimeTrajectoryDuration::kThirtySeconds));
+    trajectory_duration_combo_box->addItem(
+        tr("1 分钟"), static_cast<int>(utms::RealtimeTrajectoryDuration::kOneMinute));
+    trajectory_duration_combo_box->setCurrentIndex(2);
+    auto *show_all_trajectories_check_box = new QCheckBox(tr("显示所有目标航迹"), trajectory_group);
+    trajectory_layout->addWidget(new QLabel(tr("显示时长"), trajectory_group));
+    trajectory_layout->addWidget(trajectory_duration_combo_box);
+    trajectory_layout->addSpacing(12);
+    trajectory_layout->addWidget(show_all_trajectories_check_box);
+    trajectory_layout->addStretch();
+
     track_table_ = new utms::TrackTableWidget(data_splitter);
     track_table_->setMinimumSize(350, 200);
 
@@ -292,6 +312,7 @@ void MainWindow::setupUi()
     system_config_layout->addWidget(history_group);
     system_config_layout->addWidget(map_center_group);
     system_config_layout->addWidget(map_display_group);
+    system_config_layout->addWidget(trajectory_group);
     system_config_layout->addStretch();
     configuration_tabs->addTab(system_config_widget, tr("系统配置"));
 
@@ -347,6 +368,13 @@ void MainWindow::setupUi()
     connect(map_layer_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         map_panel_->setOnlineLayer(static_cast<utms::OnlineMapLayer>(map_layer_combo_box_->itemData(index).toInt()));
     });
+    connect(trajectory_duration_combo_box, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this, trajectory_duration_combo_box](int index) {
+                map_panel_->setTrajectoryDuration(static_cast<utms::RealtimeTrajectoryDuration>(
+                    trajectory_duration_combo_box->itemData(index).toInt()));
+            });
+    connect(show_all_trajectories_check_box, &QCheckBox::toggled, map_panel_,
+            &utms::MapPanel::setShowAllTrajectories);
     connect(locate_radar_button_, &QPushButton::clicked, this, [this]() { map_panel_->locateRadar(); });
     connect(locate_position_button, &QPushButton::clicked, this,
             [this]() { map_panel_->setCenter({latitude_spin_box_->value(), longitude_spin_box_->value()}); });
@@ -362,9 +390,7 @@ void MainWindow::setupUi()
         }
     });
     connect(track_table_, &utms::TrackTableWidget::targetSelectionCleared, this, [this]() {
-        if (!map_panel_->setSelectedTrackId(std::nullopt)) {
-            qWarning() << "MainWindow: failed to clear map track selection";
-        }
+        map_panel_->clearSelectionForMissingTarget();
     });
 }
 

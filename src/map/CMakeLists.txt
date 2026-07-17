@@ -5,6 +5,8 @@ add_library(${PROJECT_MAP_TARGET} STATIC
     AmapConfig.h
     OnlineMapState.cpp
     OnlineMapState.h
+    RealtimeTrajectoryModel.cpp
+    RealtimeTrajectoryModel.h
     WebMercator.cpp
     WebMercator.h
 )

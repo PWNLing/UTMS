@@ -7,9 +7,11 @@
 #include <QSet>
 
 #include "map/OnlineMapState.h"
+#include "map/RealtimeTrajectoryModel.h"
 
 class QGraphicsEllipseItem;
 class QGraphicsPixmapItem;
+class QGraphicsPathItem;
 class QGraphicsSimpleTextItem;
 class QImage;
 class QLabel;
@@ -29,6 +31,7 @@ class OfflineMapWidget : public QGraphicsView
     explicit OfflineMapWidget(QWidget *parent = nullptr);
 
     void renderState(const OnlineMapState &state);
+    void setTrajectories(const QVector<RealtimeTrajectory> &trajectories);
     void setView(const GeoPosition &center, int zoom);
     void setSelectedTrackId(std::optional<qint64> track_id);
 
@@ -44,6 +47,7 @@ class OfflineMapWidget : public QGraphicsView
 
     private:
     void updateMarkers();
+    void updateTrajectoryItems();
     void updateTiles();
     void requestTile(const QString &key, const QString &path, const QPointF &position_px);
     void updateMissingLabel();
@@ -57,10 +61,12 @@ class OfflineMapWidget : public QGraphicsView
     QTimer *missing_log_timer_ = nullptr;
     QString tile_root_path_;
     OnlineMapState render_state_;
+    QVector<RealtimeTrajectory> trajectories_;
     GeoPosition center_{25.311724, 110.416819};
     int zoom_ = 17;
     QHash<QString, QGraphicsPixmapItem *> tile_items_;
     QHash<qint64, QGraphicsEllipseItem *> target_items_;
+    QVector<QGraphicsPathItem *> trajectory_items_;
     QGraphicsEllipseItem *radar_item_ = nullptr;
     QGraphicsSimpleTextItem *selection_label_ = nullptr;
     QSet<QString> required_tile_keys_;

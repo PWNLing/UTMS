@@ -5,6 +5,7 @@
 #include <QtTest>
 
 #include "map/OnlineMapState.h"
+#include "ui/MapPanel.h"
 #include "ui/OfflineMapWidget.h"
 
 class MapInteractionTest : public QObject
@@ -13,6 +14,7 @@ class MapInteractionTest : public QObject
 
     private slots:
     void liveFrameDoesNotCancelUserDrag();
+    void trajectoryStateSurvivesMapModeSwitch();
 };
 
 void MapInteractionTest::liveFrameDoesNotCancelUserDrag()
@@ -63,9 +65,40 @@ void MapInteractionTest::liveFrameDoesNotCancelUserDrag()
              "A live frame changed the result of the same user drag");
 }
 
+void MapInteractionTest::trajectoryStateSurvivesMapModeSwitch()
+{
+    const QDateTime first_time = QDateTime::currentDateTime();
+    utms::RadarFrame first_frame;
+    first_frame.received_at = first_time;
+    utms::TrackData first_track;
+    first_track.track_id = 42;
+    first_track.type = utms::TargetType::kCar;
+    first_track.position = {25.0, 110.0};
+    first_frame.tracks.append(first_track);
+
+    utms::RadarFrame second_frame = first_frame;
+    second_frame.received_at = first_time.addMSecs(500);
+    second_frame.tracks[0].position = {25.0001, 110.0001};
+
+    utms::MapPanel panel;
+    panel.setFrame(first_frame);
+    panel.setFrame(second_frame);
+    QVERIFY(panel.selectTarget(42, false));
+    QCOMPARE(panel.realtimeTrajectories(second_frame.received_at).size(), 1);
+
+    panel.setMapMode(utms::MapMode::kOffline);
+    panel.setMapMode(utms::MapMode::kOnline);
+
+    QCOMPARE(panel.selectedTrackId(), std::optional<qint64>(42));
+    const QVector<utms::RealtimeTrajectory> trajectories = panel.realtimeTrajectories(second_frame.received_at);
+    QCOMPARE(trajectories.size(), 1);
+    QCOMPARE(trajectories.constFirst().segments.constFirst().points.size(), 2);
+}
+
 int main(int argc, char *argv[])
 {
     qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("minimal"));
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QApplication application(argc, argv);
     MapInteractionTest test;
     return QTest::qExec(&test, argc, argv);

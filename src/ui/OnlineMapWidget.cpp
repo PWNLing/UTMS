@@ -42,6 +42,25 @@ QJsonObject positionObject(const GeoPosition &position)
     return {{QStringLiteral("longitude"), position.longitude}, {QStringLiteral("latitude"), position.latitude}};
 }
 
+QJsonObject trajectoryObject(const RealtimeTrajectory &trajectory)
+{
+    QJsonArray segments;
+    for (const RealtimeTrajectorySegment &segment : trajectory.segments)
+    {
+        QJsonArray points;
+        for (const GeoPosition &point : segment.points)
+        {
+            points.append(positionObject(point));
+        }
+        segments.append(QJsonObject{{QStringLiteral("points"), points},
+                                    {QStringLiteral("opacity"), segment.opacity}});
+    }
+    return {{QStringLiteral("trackId"), QString::number(trajectory.track_id)},
+            {QStringLiteral("color"), targetTypeColorName(trajectory.type)},
+            {QStringLiteral("selected"), trajectory.selected},
+            {QStringLiteral("segments"), segments}};
+}
+
 OnlineMapUpdate createFullUpdate(const OnlineMapState &previous_state, const OnlineMapState &next_state)
 {
     OnlineMapUpdate update;
@@ -158,6 +177,15 @@ void OnlineMapWidget::setSelectedTrackId(std::optional<qint64> track_id)
     }
 }
 
+void OnlineMapWidget::setTrajectories(const QVector<RealtimeTrajectory> &trajectories)
+{
+    trajectories_ = trajectories;
+    if (map_ready_)
+    {
+        emit bridge_->trajectoriesUpdated(createTrajectoriesArray(trajectories_));
+    }
+}
+
 void OnlineMapWidget::handlePageReady()
 {
     map_ready_ = true;
@@ -219,7 +247,8 @@ QJsonObject OnlineMapWidget::createInitialState() const
                       {QStringLiteral("layer"), render_state_.layer() == OnlineMapLayer::kStreet
                                                     ? QStringLiteral("street")
                                                     : QStringLiteral("satellite")},
-                      {QStringLiteral("targets"), targets}};
+                      {QStringLiteral("targets"), targets},
+                      {QStringLiteral("trajectories"), createTrajectoriesArray(trajectories_)}};
     if (render_state_.radarPosition().has_value())
     {
         state.insert(QStringLiteral("radar"), positionObject(render_state_.radarPosition().value()));
@@ -256,6 +285,16 @@ QJsonObject OnlineMapWidget::createUpdateObject(const OnlineMapUpdate &update)
         object.insert(QStringLiteral("automaticCenter"), positionObject(update.automatic_center.value()));
     }
     return object;
+}
+
+QJsonArray OnlineMapWidget::createTrajectoriesArray(const QVector<RealtimeTrajectory> &trajectories)
+{
+    QJsonArray objects;
+    for (const RealtimeTrajectory &trajectory : trajectories)
+    {
+        objects.append(trajectoryObject(trajectory));
+    }
+    return objects;
 }
 
 void OnlineMapWidget::showError(const QString &message)

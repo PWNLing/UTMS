@@ -1,9 +1,11 @@
 #pragma once
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QWidget>
 
 #include "map/OnlineMapState.h"
+#include "map/RealtimeTrajectoryModel.h"
 
 class QLabel;
 class QStackedLayout;
@@ -26,6 +28,7 @@ class OnlineMapWidget : public QWidget
     void setView(const GeoPosition &center, int zoom);
     void setLayer(OnlineMapLayer layer);
     void setSelectedTrackId(std::optional<qint64> track_id);
+    void setTrajectories(const QVector<RealtimeTrajectory> &trajectories);
 
     signals:
     void targetClicked(qint64 track_id);
@@ -40,10 +43,12 @@ class OnlineMapWidget : public QWidget
     private:
     QJsonObject createInitialState() const;
     static QJsonObject createUpdateObject(const OnlineMapUpdate &update);
+    static QJsonArray createTrajectoriesArray(const QVector<RealtimeTrajectory> &trajectories);
     void handleRenderProcessTermination(int status, int exit_code);
     void showError(const QString &message);
 
     OnlineMapState render_state_;
+    QVector<RealtimeTrajectory> trajectories_;
     QStackedLayout *stacked_layout_ = nullptr;
     QWebEngineView *web_view_ = nullptr;
     QLabel *error_label_ = nullptr;

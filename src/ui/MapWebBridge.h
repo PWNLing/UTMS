@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
 
@@ -36,6 +37,7 @@ class MapWebBridge : public QObject
     void viewUpdated(double longitude, double latitude, int zoom);
     void layerUpdated(const QString &layer);
     void selectionUpdated(const QString &track_id);
+    void trajectoriesUpdated(const QJsonArray &trajectories);
 
     private:
     QString api_key_;

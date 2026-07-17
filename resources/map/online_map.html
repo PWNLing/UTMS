@@ -21,6 +21,7 @@
 <script>
 (() => {
     const targetMarkers = new Map();
+    let trajectoryPolylines = [];
     let bridge;
     let map;
     let radarMarker;
@@ -100,6 +101,28 @@
         });
     };
 
+    const replaceTrajectories = trajectories => {
+        if (trajectoryPolylines.length > 0) map.remove(trajectoryPolylines);
+        trajectoryPolylines = [];
+        trajectories.forEach(trajectory => {
+            trajectory.segments.forEach(segment => {
+                if (segment.points.length < 2) return;
+                const polyline = new AMap.Polyline({
+                    path: segment.points.map(position),
+                    strokeColor: trajectory.color,
+                    strokeOpacity: segment.opacity,
+                    strokeWeight: trajectory.selected ? 3 : 2,
+                    strokeStyle: 'solid',
+                    lineJoin: 'round',
+                    lineCap: 'round',
+                    zIndex: trajectory.selected ? 115 : 110
+                });
+                trajectoryPolylines.push(polyline);
+            });
+        });
+        if (trajectoryPolylines.length > 0) map.add(trajectoryPolylines);
+    };
+
     const updateRadar = radar => {
         if (!radarMarker) {
             radarMarker = new AMap.Marker({anchor: 'center', content: markerContent('#000000'),
@@ -124,6 +147,7 @@
         if (state.radar) updateRadar(state.radar);
         state.targets.forEach(upsertTarget);
         setSelection(state.selectedTrackId || null);
+        replaceTrajectories(state.trajectories || []);
     };
 
     const applyUpdate = update => {
@@ -145,6 +169,7 @@
             map.setZoomAndCenter(zoom, [longitude, latitude], true));
         bridge.layerUpdated.connect(setLayer);
         bridge.selectionUpdated.connect(setSelection);
+        bridge.trajectoriesUpdated.connect(replaceTrajectories);
 
         const script = document.createElement('script');
         script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(bridge.apiKey)}&plugin=AMap.Scale,AMap.ToolBar`;

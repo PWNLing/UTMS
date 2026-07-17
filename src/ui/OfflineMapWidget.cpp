@@ -9,12 +9,14 @@
 #include <QFutureWatcher>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPixmapItem>
+#include <QGraphicsPathItem>
 #include <QGraphicsScene>
 #include <QGraphicsSimpleTextItem>
 #include <QImage>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QTimer>
@@ -109,6 +111,12 @@ void OfflineMapWidget::renderState(const OnlineMapState &state)
     updateMarkers();
 }
 
+void OfflineMapWidget::setTrajectories(const QVector<RealtimeTrajectory> &trajectories)
+{
+    trajectories_ = trajectories;
+    updateTrajectoryItems();
+}
+
 void OfflineMapWidget::setView(const GeoPosition &center, int zoom)
 {
     center_ = center;
@@ -119,6 +127,7 @@ void OfflineMapWidget::setView(const GeoPosition &center, int zoom)
     centerOn(WebMercator::geoToGlobalPixel(center_, zoom_));
     applying_view_ = false;
     updateMarkers();
+    updateTrajectoryItems();
     updateTiles();
 }
 
@@ -249,6 +258,41 @@ void OfflineMapWidget::updateMarkers()
         map_scene_->removeItem(radar_item_);
         delete radar_item_;
         radar_item_ = nullptr;
+    }
+}
+
+void OfflineMapWidget::updateTrajectoryItems()
+{
+    for (QGraphicsPathItem *item : std::as_const(trajectory_items_))
+    {
+        map_scene_->removeItem(item);
+        delete item;
+    }
+    trajectory_items_.clear();
+
+    for (const RealtimeTrajectory &trajectory : std::as_const(trajectories_))
+    {
+        for (const RealtimeTrajectorySegment &segment : trajectory.segments)
+        {
+            if (segment.points.size() < 2)
+            {
+                continue;
+            }
+
+            QPainterPath path(WebMercator::geoToGlobalPixel(segment.points.constFirst(), zoom_));
+            for (qsizetype point_index = 1; point_index < segment.points.size(); ++point_index)
+            {
+                path.lineTo(WebMercator::geoToGlobalPixel(segment.points.at(point_index), zoom_));
+            }
+
+            QColor color(targetTypeColorName(trajectory.type));
+            color.setAlphaF(segment.opacity);
+            QPen pen(color, trajectory.selected ? 3.0 : 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+            pen.setCosmetic(true);
+            QGraphicsPathItem *item = map_scene_->addPath(path, pen);
+            item->setZValue(10.0);
+            trajectory_items_.append(item);
+        }
     }
 }
 
