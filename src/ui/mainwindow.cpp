@@ -4,12 +4,15 @@
 
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTabWidget>
@@ -18,6 +21,8 @@
 #include <QWidget>
 
 #include "core/RadarTypes.h"
+#include "history/HistoryController.h"
+#include "history/HistoryStore.h"
 #include "map/OnlineMapState.h"
 #include "media/RtspController.h"
 #include "network/UdpReceiver.h"
@@ -28,14 +33,15 @@
 #include "ui/VideoStreamWidget.h"
 #include "workbench/TrackTableWidget.h"
 
-MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent)
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     qRegisterMetaType<utms::RadarFrame>();
     qRegisterMetaType<utms::UdpStatus>();
     qRegisterMetaType<utms::RtspConnectionState>();
+    qRegisterMetaType<utms::HistoryConfiguration>();
     setupUi();
     handleUdpStatusChanged(utms::UdpStatus::kStopped, tr("UDP 未启动"));
+    setupHistoryController();
     setupUdpWorker();
     setupVideoController();
 }
@@ -47,15 +53,22 @@ MainWindow::~MainWindow()
         udp_thread_->setParent(nullptr);
         emit shutdownUdpWorkerRequested();
     }
+    if (history_thread_ != nullptr && history_thread_->isRunning()) {
+        connect(history_thread_, &QThread::finished, history_thread_, &QObject::deleteLater);
+        history_thread_->setParent(nullptr);
+        emit shutdownHistoryWorkerRequested();
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     const bool udp_stopped = udp_shutdown_complete_ || udp_thread_ == nullptr || !udp_thread_->isRunning();
+    const bool history_stopped =
+        history_shutdown_complete_ || history_thread_ == nullptr || !history_thread_->isRunning();
     const bool video_stopped = video_shutdown_complete_ || rtsp_controller_ == nullptr;
     const bool monitor_stopped =
         monitor_shutdown_complete_ || system_monitor_widget_ == nullptr || system_monitor_widget_->isShutdownComplete();
-    if (udp_stopped && video_stopped && monitor_stopped) {
+    if (udp_stopped && history_stopped && video_stopped && monitor_stopped) {
         event->accept();
         return;
     }
@@ -68,6 +81,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
             emit stopListeningRequested();
         } else {
             udp_shutdown_complete_ = true;
+            requestHistoryShutdown();
         }
         if (rtsp_controller_ != nullptr) {
             rtsp_controller_->shutdown();
@@ -87,6 +101,7 @@ void MainWindow::handleUdpWorkerStopped()
 {
     if (shutdown_started_ && udp_thread_ != nullptr) {
         udp_thread_->quit();
+        requestHistoryShutdown();
     }
 }
 
@@ -104,7 +119,8 @@ void MainWindow::handleSystemMonitorStopped()
 
 void MainWindow::completeShutdownIfReady()
 {
-    if (shutdown_started_ && udp_shutdown_complete_ && video_shutdown_complete_ && monitor_shutdown_complete_) {
+    if (shutdown_started_ && udp_shutdown_complete_ && history_shutdown_complete_ && video_shutdown_complete_ &&
+        monitor_shutdown_complete_) {
         close();
     }
 }
@@ -112,6 +128,13 @@ void MainWindow::completeShutdownIfReady()
 void MainWindow::handleUdpStatusChanged(utms::UdpStatus status, const QString &detail)
 {
     const bool listening = status != utms::UdpStatus::kStopped;
+    if (!udp_listening_ && listening) {
+        emit startHistorySessionRequested();
+    } else if (udp_listening_ && !listening) {
+        emit stopHistorySessionRequested();
+    }
+    udp_listening_ = listening;
+
     port_spin_box_->setEnabled(!listening);
     start_button_->setEnabled(!listening);
     stop_button_->setEnabled(listening);
@@ -131,6 +154,36 @@ void MainWindow::handleUdpStatusChanged(utms::UdpStatus status, const QString &d
     config_status_label_->setText(detail);
     config_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
     bottom_status_bar_->setUdpStatus(status);
+}
+
+void MainWindow::handleHistoryConfigurationLoaded(const utms::HistoryConfiguration &configuration)
+{
+    const QSignalBlocker sampling_blocker(history_sampling_combo_box_);
+    const QSignalBlocker retention_blocker(history_retention_spin_box_);
+    const int sampling_index = history_sampling_combo_box_->findData(static_cast<int>(configuration.sampling_rate));
+    if (sampling_index >= 0) {
+        history_sampling_combo_box_->setCurrentIndex(sampling_index);
+    }
+    history_retention_spin_box_->setValue(configuration.retention_days);
+}
+
+void MainWindow::handleHistoryAvailabilityChanged(bool available, const QString &detail)
+{
+    const QString color = available ? QStringLiteral("#208a4b") : QStringLiteral("#c0392b");
+    history_status_label_->setText(detail);
+    history_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
+}
+
+void MainWindow::handleHistorySessionActiveChanged(bool active, const QString &detail)
+{
+    const QString color = active ? QStringLiteral("#208a4b") : QStringLiteral("#555555");
+    history_status_label_->setText(detail);
+    history_status_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(color));
+}
+
+void MainWindow::handleHistoryError(const QString &message)
+{
+    handleHistoryAvailabilityChanged(false, tr("历史记录错误：%1").arg(message));
 }
 
 void MainWindow::updateCurrentFrame(const utms::RadarFrame &frame)
@@ -176,6 +229,27 @@ void MainWindow::setupUi()
     udp_layout->addWidget(stop_button_);
     udp_layout->addWidget(config_status_label_, 1);
 
+    auto *history_group = new QGroupBox(tr("历史记录"), system_config_widget);
+    auto *history_layout = new QGridLayout(history_group);
+    history_sampling_combo_box_ = new QComboBox(history_group);
+    history_sampling_combo_box_->addItem(tr("1 FPS"), static_cast<int>(utms::HistorySamplingRate::kOneFps));
+    history_sampling_combo_box_->addItem(tr("2 FPS"), static_cast<int>(utms::HistorySamplingRate::kTwoFps));
+    history_sampling_combo_box_->addItem(tr("5 FPS"), static_cast<int>(utms::HistorySamplingRate::kFiveFps));
+    history_sampling_combo_box_->addItem(tr("全帧"), static_cast<int>(utms::HistorySamplingRate::kEveryFrame));
+    history_sampling_combo_box_->setCurrentIndex(1);
+    history_retention_spin_box_ = new QSpinBox(history_group);
+    history_retention_spin_box_->setRange(1, 30);
+    history_retention_spin_box_->setSuffix(tr(" 天"));
+    history_retention_spin_box_->setValue(7);
+    history_status_label_ = new QLabel(tr("历史数据库初始化中"), history_group);
+    history_layout->addWidget(new QLabel(tr("采样频率"), history_group), 0, 0);
+    history_layout->addWidget(history_sampling_combo_box_, 0, 1);
+    history_layout->addWidget(new QLabel(tr("保留期限"), history_group), 0, 2);
+    history_layout->addWidget(history_retention_spin_box_, 0, 3);
+    history_layout->addWidget(history_status_label_, 1, 0, 1, 4);
+    history_layout->setColumnStretch(1, 1);
+    history_layout->setColumnStretch(3, 1);
+
     auto *map_center_group = new QGroupBox(tr("地图中心"), system_config_widget);
     auto *map_center_layout = new QGridLayout(map_center_group);
     longitude_spin_box_ = new QDoubleSpinBox(map_center_group);
@@ -217,6 +291,7 @@ void MainWindow::setupUi()
     track_table_->setMinimumSize(350, 200);
 
     system_config_layout->addWidget(udp_group);
+    system_config_layout->addWidget(history_group);
     system_config_layout->addWidget(map_center_group);
     system_config_layout->addWidget(map_display_group);
     system_config_layout->addStretch();
@@ -251,6 +326,15 @@ void MainWindow::setupUi()
     connect(start_button_, &QPushButton::clicked, this,
             [this]() { emit startListeningRequested(static_cast<quint16>(port_spin_box_->value())); });
     connect(stop_button_, &QPushButton::clicked, this, &MainWindow::stopListeningRequested);
+    const auto save_history_configuration = [this]() {
+        const auto sampling_rate =
+            static_cast<utms::HistorySamplingRate>(history_sampling_combo_box_->currentData().toInt());
+        emit saveHistoryConfigurationRequested({sampling_rate, history_retention_spin_box_->value()});
+    };
+    connect(history_sampling_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [save_history_configuration](int) { save_history_configuration(); });
+    connect(history_retention_spin_box_, qOverload<int>(&QSpinBox::valueChanged), this,
+            [save_history_configuration](int) { save_history_configuration(); });
     connect(map_mode_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         const auto mode = static_cast<utms::MapMode>(map_mode_combo_box_->itemData(index).toInt());
         if (mode == utms::MapMode::kOffline) {
@@ -286,6 +370,44 @@ void MainWindow::setupUi()
     });
 }
 
+void MainWindow::setupHistoryController()
+{
+    history_thread_ = new QThread(this);
+    history_controller_ = new utms::HistoryController();
+    if (!history_controller_->moveToThread(history_thread_)) {
+        delete history_controller_;
+        history_controller_ = nullptr;
+        history_shutdown_complete_ = true;
+        handleHistoryAvailabilityChanged(false, tr("历史工作线程初始化失败"));
+        return;
+    }
+
+    const QString database_path =
+        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("data/utms.sqlite"));
+    connect(history_thread_, &QThread::started, history_controller_,
+            [controller = history_controller_, database_path]() { controller->initialize(database_path); });
+    connect(this, &MainWindow::startHistorySessionRequested, history_controller_,
+            &utms::HistoryController::startSession);
+    connect(this, &MainWindow::stopHistorySessionRequested, history_controller_, &utms::HistoryController::stopSession);
+    connect(this, &MainWindow::saveHistoryConfigurationRequested, history_controller_,
+            &utms::HistoryController::saveConfiguration);
+    connect(this, &MainWindow::shutdownHistoryWorkerRequested, history_controller_, &utms::HistoryController::shutdown);
+    connect(history_controller_, &utms::HistoryController::configurationLoaded, this,
+            &MainWindow::handleHistoryConfigurationLoaded);
+    connect(history_controller_, &utms::HistoryController::availabilityChanged, this,
+            &MainWindow::handleHistoryAvailabilityChanged);
+    connect(history_controller_, &utms::HistoryController::sessionActiveChanged, this,
+            &MainWindow::handleHistorySessionActiveChanged);
+    connect(history_controller_, &utms::HistoryController::errorOccurred, this, &MainWindow::handleHistoryError);
+    connect(history_thread_, &QThread::finished, history_controller_, &QObject::deleteLater);
+    connect(history_thread_, &QThread::finished, this, [this]() {
+        history_shutdown_complete_ = true;
+        completeShutdownIfReady();
+    });
+
+    history_thread_->start();
+}
+
 void MainWindow::setupUdpWorker()
 {
     udp_thread_ = new QThread(this);
@@ -311,6 +433,21 @@ void MainWindow::setupUdpWorker()
     });
 
     udp_thread_->start();
+}
+
+void MainWindow::requestHistoryShutdown()
+{
+    if (history_shutdown_requested_) {
+        return;
+    }
+    history_shutdown_requested_ = true;
+
+    if (history_thread_ != nullptr && history_thread_->isRunning() && history_controller_ != nullptr) {
+        emit shutdownHistoryWorkerRequested();
+    } else {
+        history_shutdown_complete_ = true;
+        completeShutdownIfReady();
+    }
 }
 
 void MainWindow::setupVideoController()

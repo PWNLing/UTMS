@@ -10,6 +10,7 @@ set(PROJECT_QT_COMPONENTS
     Core
     Gui
     Network
+    Sql
     WebChannel
     WebEngineWidgets
     Widgets

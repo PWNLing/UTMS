@@ -59,6 +59,7 @@ target_include_directories(${PROJECT_UI_TARGET}
 target_link_libraries(${PROJECT_UI_TARGET}
     PUBLIC
         ${PROJECT_NAMESPACE}::core
+        ${PROJECT_NAMESPACE}::history
         ${PROJECT_NAMESPACE}::network
         ${PROJECT_NAMESPACE}::map
         ${PROJECT_NAMESPACE}::media
