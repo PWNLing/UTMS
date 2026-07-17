@@ -1,7 +1,9 @@
 #pragma once
 
+#include <QHash>
 #include <QWidget>
 
+#include "core/GeofenceTypes.h"
 #include "history/HistoryTypes.h"
 #include "map/OnlineMapState.h"
 #include "map/RealtimeTrajectoryModel.h"
@@ -39,10 +41,14 @@ public:
     void setCenter(const GeoPosition &center);
     void setTrajectoryDuration(RealtimeTrajectoryDuration duration);
     void setShowAllTrajectories(bool show_all_trajectories);
+    void setGeofences(const QVector<Geofence> &geofences);
+    bool setEditableGeofenceId(std::optional<qint64> geofence_id);
+    void discardPendingGeofenceEdits();
     bool setSelectedTrackId(std::optional<qint64> track_id);
     void clearSelectionForMissingTarget();
     bool selectTarget(qint64 track_id, bool center_on_target);
     bool locateRadar();
+    bool locateGeofence(qint64 geofence_id);
 
     MapMode mapMode() const;
     GeoPosition center() const;
@@ -52,12 +58,17 @@ public:
     bool isReplayMode() const;
     std::optional<HistoryReplayTrajectory> replayTrajectory() const;
     QVector<RealtimeTrajectory> realtimeTrajectories(const QDateTime &now) const;
+    const QVector<Geofence> &geofences() const;
 
 signals:
     void targetClicked(qint64 track_id);
+    void geofenceEdited(const Geofence &geofence);
+    void geofenceEditingChanged(std::optional<qint64> geofence_id);
+    void geofenceEditError(const QString &message);
 
 private:
     void handleTargetClicked(qint64 track_id);
+    void handleGeofenceEdited(const Geofence &geofence);
     void handleOnlineViewChanged(const GeoPosition &center, int zoom);
     void handleOfflineViewChanged(const GeoPosition &center, int zoom);
     void applySelectionToActiveMap(std::optional<qint64> track_id);
@@ -76,6 +87,10 @@ private:
     MapMode map_mode_ = MapMode::kOnline;
     std::optional<RadarFrame> latest_live_frame_;
     std::optional<HistoryReplayTrajectory> replay_trajectory_;
+    QVector<Geofence> geofences_;
+    QVector<Geofence> confirmed_geofences_;
+    QHash<qint64, Geofence> pending_geofence_edits_;
+    std::optional<qint64> editable_geofence_id_;
     bool replay_mode_ = false;
 };
 

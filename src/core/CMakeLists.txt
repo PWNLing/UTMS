@@ -1,6 +1,10 @@
 set(PROJECT_CORE_TARGET "${PROJECT_NAME}_core")
 
 add_library(${PROJECT_CORE_TARGET} STATIC
+    GeofenceGeometry.cpp
+    GeofenceGeometry.h
+    GeofenceTypes.cpp
+    GeofenceTypes.h
     LoginCredentialValidator.cpp
     LoginCredentialValidator.h
     Logger.cpp

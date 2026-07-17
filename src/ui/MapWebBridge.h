@@ -25,6 +25,7 @@ class MapWebBridge : public QObject
     void reportMapWarning(const QString &message);
     void reportViewChanged(double longitude, double latitude, int zoom);
     void reportTargetClicked(const QString &track_id);
+    void reportGeofenceEdited(const QJsonObject &geofence);
 
     signals:
     void pageReadyReported();
@@ -38,6 +39,9 @@ class MapWebBridge : public QObject
     void layerUpdated(const QString &layer);
     void selectionUpdated(const QString &track_id);
     void trajectoriesUpdated(const QJsonArray &trajectories);
+    void geofencesUpdated(const QJsonArray &geofences);
+    void geofenceEditingUpdated(const QString &geofence_id);
+    void geofenceEdited(const QJsonObject &geofence);
 
     private:
     QString api_key_;

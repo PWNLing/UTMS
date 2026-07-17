@@ -1,12 +1,14 @@
 #include "ui/MapPanel.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <QDateTime>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include "core/GeofenceGeometry.h"
 #include "map/OnlineMapState.h"
 #include "ui/OfflineMapWidget.h"
 #include "ui/OnlineMapWidget.h"
@@ -17,6 +19,69 @@ namespace
 {
 
 constexpr int kTrajectoryRefreshIntervalMs = 500;
+constexpr double kCoordinateComparisonTolerance = 1e-10;
+constexpr double kRadiusComparisonToleranceM = 1e-6;
+
+bool positionsEqual(const GeoPosition &left, const GeoPosition &right)
+{
+    return std::abs(left.latitude - right.latitude) <= kCoordinateComparisonTolerance &&
+           std::abs(left.longitude - right.longitude) <= kCoordinateComparisonTolerance;
+}
+
+bool geometriesEqual(const GeofenceGeometry &left, const GeofenceGeometry &right)
+{
+    if (left.index() != right.index())
+    {
+        return false;
+    }
+    if (const auto *left_circle = std::get_if<CircleGeofence>(&left); left_circle != nullptr)
+    {
+        const auto &right_circle = std::get<CircleGeofence>(right);
+        return positionsEqual(left_circle->center, right_circle.center) &&
+               std::abs(left_circle->radius_m - right_circle.radius_m) <= kRadiusComparisonToleranceM;
+    }
+    if (const auto *left_rectangle = std::get_if<RectangleGeofence>(&left); left_rectangle != nullptr)
+    {
+        const auto &right_rectangle = std::get<RectangleGeofence>(right);
+        return positionsEqual(left_rectangle->southwest, right_rectangle.southwest) &&
+               positionsEqual(left_rectangle->northeast, right_rectangle.northeast);
+    }
+
+    const auto &left_vertices = std::get<PolygonGeofence>(left).vertices;
+    const auto &right_vertices = std::get<PolygonGeofence>(right).vertices;
+    if (left_vertices.size() != right_vertices.size())
+    {
+        return false;
+    }
+    for (qsizetype vertex_index = 0; vertex_index < left_vertices.size(); ++vertex_index)
+    {
+        if (!positionsEqual(left_vertices.at(vertex_index), right_vertices.at(vertex_index)))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool geofenceCollectionsEqual(const QVector<Geofence> &left, const QVector<Geofence> &right)
+{
+    if (left.size() != right.size())
+    {
+        return false;
+    }
+    for (qsizetype index = 0; index < left.size(); ++index)
+    {
+        const Geofence &left_geofence = left.at(index);
+        const Geofence &right_geofence = right.at(index);
+        if (left_geofence.id != right_geofence.id || left_geofence.name != right_geofence.name ||
+            left_geofence.enabled != right_geofence.enabled || left_geofence.visible != right_geofence.visible ||
+            !geometriesEqual(left_geofence.geometry, right_geofence.geometry))
+        {
+            return false;
+        }
+    }
+    return true;
+}
 
 } // namespace
 
@@ -33,6 +98,10 @@ MapPanel::MapPanel(QWidget *parent)
     offline_map_->renderState(state_);
     connect(online_map_, &OnlineMapWidget::targetClicked, this, &MapPanel::handleTargetClicked);
     connect(offline_map_, &OfflineMapWidget::targetClicked, this, &MapPanel::handleTargetClicked);
+    connect(online_map_, &OnlineMapWidget::geofenceEdited, this, &MapPanel::handleGeofenceEdited);
+    connect(offline_map_, &OfflineMapWidget::geofenceEdited, this, &MapPanel::handleGeofenceEdited);
+    connect(online_map_, &OnlineMapWidget::geofenceEditError, this, &MapPanel::geofenceEditError);
+    connect(offline_map_, &OfflineMapWidget::geofenceEditError, this, &MapPanel::geofenceEditError);
     connect(online_map_, &OnlineMapWidget::viewChanged, this, &MapPanel::handleOnlineViewChanged);
     connect(offline_map_, &OfflineMapWidget::viewChanged, this, &MapPanel::handleOfflineViewChanged);
     trajectory_refresh_timer_->setInterval(kTrajectoryRefreshIntervalMs);
@@ -130,8 +199,21 @@ void MapPanel::renderDisplayFrame(const RadarFrame &frame)
 
 void MapPanel::setMapMode(MapMode mode)
 {
+    online_map_->setEditableGeofenceId(std::nullopt);
+    offline_map_->setEditableGeofenceId(std::nullopt);
     map_mode_ = mode;
     synchronizeActiveMap();
+    if (editable_geofence_id_.has_value())
+    {
+        if (map_mode_ == MapMode::kOnline)
+        {
+            online_map_->setEditableGeofenceId(editable_geofence_id_);
+        }
+        else
+        {
+            offline_map_->setEditableGeofenceId(editable_geofence_id_);
+        }
+    }
     map_stack_->setCurrentWidget(mode == MapMode::kOnline ? static_cast<QWidget *>(online_map_)
                                                           : static_cast<QWidget *>(offline_map_));
 }
@@ -158,6 +240,97 @@ void MapPanel::setShowAllTrajectories(bool show_all_trajectories)
 {
     trajectory_model_.setShowAllTargets(show_all_trajectories);
     renderTrajectories(QDateTime::currentDateTime());
+}
+
+void MapPanel::setGeofences(const QVector<Geofence> &geofences)
+{
+    const QVector<Geofence> previous_geofences = geofences_;
+    confirmed_geofences_ = geofences;
+    geofences_ = geofences;
+    for (auto pending = pending_geofence_edits_.begin(); pending != pending_geofence_edits_.end();)
+    {
+        const qint64 pending_geofence_id = pending.key();
+        const auto incoming =
+            std::find_if(geofences_.begin(), geofences_.end(),
+                         [pending_geofence_id](const Geofence &geofence)
+                         { return geofence.id == pending_geofence_id; });
+        if (incoming == geofences_.end())
+        {
+            pending = pending_geofence_edits_.erase(pending);
+            continue;
+        }
+        if (geometriesEqual(incoming->geometry, pending->geometry))
+        {
+            pending = pending_geofence_edits_.erase(pending);
+            continue;
+        }
+        incoming->geometry = pending->geometry;
+        ++pending;
+    }
+
+    if (editable_geofence_id_.has_value())
+    {
+        const auto editable =
+            std::find_if(geofences_.cbegin(), geofences_.cend(),
+                         [this](const Geofence &geofence)
+                         { return geofence.id == editable_geofence_id_.value() && geofence.visible; });
+        if (editable == geofences_.cend())
+        {
+            setEditableGeofenceId(std::nullopt);
+        }
+    }
+
+    const bool visible_state_changed = !geofenceCollectionsEqual(previous_geofences, geofences_);
+    const bool suppress_online_refresh =
+        map_mode_ == MapMode::kOnline && editable_geofence_id_.has_value() && !visible_state_changed;
+    const bool suppress_offline_refresh =
+        map_mode_ == MapMode::kOffline && editable_geofence_id_.has_value() && !visible_state_changed;
+    if (!suppress_online_refresh)
+    {
+        online_map_->setGeofences(geofences_);
+    }
+    if (!suppress_offline_refresh)
+    {
+        offline_map_->setGeofences(geofences_);
+    }
+}
+
+bool MapPanel::setEditableGeofenceId(std::optional<qint64> geofence_id)
+{
+    if (geofence_id.has_value())
+    {
+        const auto geofence =
+            std::find_if(geofences_.cbegin(), geofences_.cend(),
+                         [geofence_id](const Geofence &candidate)
+                         { return candidate.id == geofence_id.value() && candidate.visible; });
+        if (geofence == geofences_.cend())
+        {
+            return false;
+        }
+    }
+
+    editable_geofence_id_ = geofence_id;
+    online_map_->setEditableGeofenceId(map_mode_ == MapMode::kOnline ? geofence_id : std::nullopt);
+    offline_map_->setEditableGeofenceId(map_mode_ == MapMode::kOffline ? geofence_id : std::nullopt);
+    if (!geofence_id.has_value())
+    {
+        online_map_->setGeofences(geofences_);
+        offline_map_->setGeofences(geofences_);
+    }
+    emit geofenceEditingChanged(editable_geofence_id_);
+    return true;
+}
+
+void MapPanel::discardPendingGeofenceEdits()
+{
+    pending_geofence_edits_.clear();
+    editable_geofence_id_.reset();
+    online_map_->cancelPendingGeofenceEdit();
+    offline_map_->setEditableGeofenceId(std::nullopt);
+    geofences_ = confirmed_geofences_;
+    online_map_->setGeofences(geofences_);
+    offline_map_->setGeofences(geofences_);
+    emit geofenceEditingChanged(std::nullopt);
 }
 
 bool MapPanel::setSelectedTrackId(std::optional<qint64> track_id)
@@ -227,6 +400,20 @@ bool MapPanel::locateRadar()
     return true;
 }
 
+bool MapPanel::locateGeofence(qint64 geofence_id)
+{
+    const auto geofence =
+        std::find_if(geofences_.cbegin(), geofences_.cend(),
+                     [geofence_id](const Geofence &candidate) { return candidate.id == geofence_id; });
+    if (geofence == geofences_.cend())
+    {
+        return false;
+    }
+    state_.setCenter(geofenceCenter(*geofence));
+    applyViewToActiveMap();
+    return true;
+}
+
 MapMode MapPanel::mapMode() const
 {
     return map_mode_;
@@ -267,12 +454,39 @@ QVector<RealtimeTrajectory> MapPanel::realtimeTrajectories(const QDateTime &now)
     return trajectory_model_.visibleTrajectories(now);
 }
 
+const QVector<Geofence> &MapPanel::geofences() const
+{
+    return geofences_;
+}
+
 void MapPanel::handleTargetClicked(qint64 track_id)
 {
     if (setSelectedTrackId(track_id))
     {
         emit targetClicked(track_id);
     }
+}
+
+void MapPanel::handleGeofenceEdited(const Geofence &geofence)
+{
+    const auto current =
+        std::find_if(geofences_.begin(), geofences_.end(),
+                     [&geofence](const Geofence &candidate) { return candidate.id == geofence.id; });
+    if (current == geofences_.end())
+    {
+        return;
+    }
+    current->geometry = geofence.geometry;
+    pending_geofence_edits_.insert(geofence.id, *current);
+    if (sender() == online_map_)
+    {
+        offline_map_->setGeofences(geofences_);
+    }
+    else
+    {
+        online_map_->setGeofences(geofences_);
+    }
+    emit geofenceEdited(geofence);
 }
 
 void MapPanel::handleOnlineViewChanged(const GeoPosition &center, int zoom)

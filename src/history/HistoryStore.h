@@ -3,6 +3,7 @@
 #include <QString>
 #include <QVector>
 
+#include "core/GeofenceTypes.h"
 #include "history/HistoryTypes.h"
 
 namespace utms {
@@ -30,6 +31,13 @@ public:
     std::optional<int> cleanupExpiredHistory(const QDateTime &cutoff, QString *error_message = nullptr);
     bool deleteSession(qint64 session_id, QString *error_message = nullptr);
     std::optional<int> deleteAllSessions(QString *error_message = nullptr);
+    std::optional<QVector<Geofence>> loadGeofences(QString *error_message = nullptr) const;
+    std::optional<qint64> createGeofence(const Geofence &geofence, QString *error_message = nullptr);
+    bool updateGeofence(const Geofence &geofence, QString *error_message = nullptr);
+    bool updateGeofenceGeometry(const Geofence &geofence, QString *error_message = nullptr);
+    bool setGeofenceEnabled(qint64 geofence_id, bool enabled, QString *error_message = nullptr);
+    bool setGeofenceVisible(qint64 geofence_id, bool visible, QString *error_message = nullptr);
+    bool deleteGeofence(qint64 geofence_id, QString *error_message = nullptr);
     bool probeWriteAccess(QString *error_message = nullptr);
     qint64 databaseSizeBytes() const;
 

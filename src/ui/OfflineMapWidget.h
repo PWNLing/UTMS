@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QSet>
 
+#include "core/GeofenceTypes.h"
 #include "map/OnlineMapState.h"
 #include "map/RealtimeTrajectoryModel.h"
 
@@ -32,11 +33,15 @@ class OfflineMapWidget : public QGraphicsView
 
     void renderState(const OnlineMapState &state);
     void setTrajectories(const QVector<RealtimeTrajectory> &trajectories);
+    void setGeofences(const QVector<Geofence> &geofences);
+    void setEditableGeofenceId(std::optional<qint64> geofence_id);
     void setView(const GeoPosition &center, int zoom);
     void setSelectedTrackId(std::optional<qint64> track_id);
 
     signals:
     void targetClicked(qint64 track_id);
+    void geofenceEdited(const Geofence &geofence);
+    void geofenceEditError(const QString &message);
     void viewChanged(const GeoPosition &center, int zoom);
 
     protected:
@@ -48,6 +53,7 @@ class OfflineMapWidget : public QGraphicsView
     private:
     void updateMarkers();
     void updateTrajectoryItems();
+    void updateGeofenceItems();
     void updateTiles();
     void requestTile(const QString &key, const QString &path, const QPointF &position_px);
     void updateMissingLabel();
@@ -62,11 +68,14 @@ class OfflineMapWidget : public QGraphicsView
     QString tile_root_path_;
     OnlineMapState render_state_;
     QVector<RealtimeTrajectory> trajectories_;
+    QVector<Geofence> geofences_;
     GeoPosition center_{25.311724, 110.416819};
     int zoom_ = 17;
     QHash<QString, QGraphicsPixmapItem *> tile_items_;
     QHash<qint64, QGraphicsEllipseItem *> target_items_;
     QVector<QGraphicsPathItem *> trajectory_items_;
+    QVector<QGraphicsPathItem *> geofence_items_;
+    QVector<QGraphicsEllipseItem *> geofence_handle_items_;
     QGraphicsEllipseItem *radar_item_ = nullptr;
     QGraphicsSimpleTextItem *selection_label_ = nullptr;
     QSet<QString> required_tile_keys_;
@@ -77,6 +86,8 @@ class OfflineMapWidget : public QGraphicsView
     QString first_pending_missing_tile_path_;
     int pending_missing_tile_count_ = 0;
     bool applying_view_ = false;
+    std::optional<qint64> editable_geofence_id_;
+    QGraphicsItem *active_geofence_edit_item_ = nullptr;
 };
 
 } // namespace utms

@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QWidget>
 
+#include "core/GeofenceTypes.h"
 #include "map/OnlineMapState.h"
 #include "map/RealtimeTrajectoryModel.h"
 
@@ -29,9 +30,14 @@ class OnlineMapWidget : public QWidget
     void setLayer(OnlineMapLayer layer);
     void setSelectedTrackId(std::optional<qint64> track_id);
     void setTrajectories(const QVector<RealtimeTrajectory> &trajectories);
+    void setGeofences(const QVector<Geofence> &geofences);
+    void setEditableGeofenceId(std::optional<qint64> geofence_id);
+    void cancelPendingGeofenceEdit();
 
     signals:
     void targetClicked(qint64 track_id);
+    void geofenceEdited(const Geofence &geofence);
+    void geofenceEditError(const QString &message);
     void viewChanged(const GeoPosition &center, int zoom);
     void mapError(const QString &message);
 
@@ -39,16 +45,21 @@ class OnlineMapWidget : public QWidget
     void handlePageReady();
     void handleMapError(const QString &message);
     void handleMapWarning(const QString &message);
+    void handleGeofenceEdited(const QJsonObject &geofence_object);
 
     private:
     QJsonObject createInitialState() const;
     static QJsonObject createUpdateObject(const OnlineMapUpdate &update);
     static QJsonArray createTrajectoriesArray(const QVector<RealtimeTrajectory> &trajectories);
+    static QJsonArray createGeofencesArray(const QVector<Geofence> &geofences);
     void handleRenderProcessTermination(int status, int exit_code);
     void showError(const QString &message);
 
     OnlineMapState render_state_;
     QVector<RealtimeTrajectory> trajectories_;
+    QVector<Geofence> geofences_;
+    std::optional<qint64> editable_geofence_id_;
+    std::optional<qint64> recently_editable_geofence_id_;
     QStackedLayout *stacked_layout_ = nullptr;
     QWebEngineView *web_view_ = nullptr;
     QLabel *error_label_ = nullptr;

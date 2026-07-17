@@ -5,6 +5,7 @@
 #include <QMainWindow>
 #include <QVector>
 
+#include "core/GeofenceTypes.h"
 #include "core/RadarTypes.h"
 
 class QCloseEvent;
@@ -27,6 +28,7 @@ class UdpReceiver;
 class HistoryController;
 class HistoryPlaybackController;
 class HistoryQueryWidget;
+class GeofenceManagerWidget;
 enum class UdpStatus;
 struct HistoryConfiguration;
 struct HistoryExportRequest;
@@ -54,6 +56,12 @@ signals:
     void deleteHistorySessionRequested(qint64 session_id);
     void deleteAllHistorySessionsRequested();
     void refreshHistoryInfoRequested();
+    void createGeofenceRequested(const utms::Geofence &geofence);
+    void updateGeofenceRequested(const utms::Geofence &geofence);
+    void updateGeofenceGeometryRequested(const utms::Geofence &geofence);
+    void setGeofenceEnabledRequested(qint64 geofence_id, bool enabled);
+    void setGeofenceVisibleRequested(qint64 geofence_id, bool visible);
+    void deleteGeofenceRequested(qint64 geofence_id);
     void shutdownHistoryWorkerRequested();
 
 protected:
@@ -72,6 +80,8 @@ private slots:
     void handleHistoryQueryCompleted(const utms::HistoryQueryResult &result);
     void handleHistoryExportCompleted(const QString &output_path, int record_count);
     void handleHistoryDatabaseSizeChanged(qint64 size_bytes);
+    void handleGeofencesLoaded(const QVector<utms::Geofence> &geofences);
+    void handleGeofenceError(const QString &message);
     void handleReplayModeChanged(bool replay_mode);
     void handlePlaybackStateChanged(bool playing);
     void handlePlaybackFrameChanged(const utms::RadarFrame &frame, int frame_index, int frame_count,
@@ -98,6 +108,7 @@ private:
     QSpinBox *history_retention_spin_box_ = nullptr;
     QLabel *history_status_label_ = nullptr;
     utms::HistoryQueryWidget *history_query_widget_ = nullptr;
+    utms::GeofenceManagerWidget *geofence_manager_widget_ = nullptr;
     utms::TrackTableWidget *track_table_ = nullptr;
     utms::MapPanel *map_panel_ = nullptr;
     QComboBox *map_mode_combo_box_ = nullptr;

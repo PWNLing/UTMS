@@ -10,6 +10,8 @@ set(PROJECT_UI_TARGET "${PROJECT_NAME}_ui")
 add_library(${PROJECT_UI_TARGET} STATIC
     BottomStatusBar.cpp
     BottomStatusBar.h
+    GeofenceManagerWidget.cpp
+    GeofenceManagerWidget.h
     HistoryQueryWidget.cpp
     HistoryQueryWidget.h
     LoginDialog.cpp

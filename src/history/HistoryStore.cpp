@@ -6,6 +6,9 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -13,6 +16,7 @@
 #include <QUuid>
 #include <QVariant>
 
+#include "core/GeofenceGeometry.h"
 #include "history/HistoryCsvExporter.h"
 
 namespace utms {
@@ -93,6 +97,106 @@ qint64 frameTimeMs(const RadarFrame &frame) {
         return qRound64(frame.sender_timestamp_seconds.value() * 1'000.0);
     }
     return frame.received_at.toMSecsSinceEpoch();
+}
+
+QJsonObject positionObject(const GeoPosition &position) {
+    return {{QStringLiteral("latitude"), position.latitude}, {QStringLiteral("longitude"), position.longitude}};
+}
+
+std::optional<GeoPosition> positionFromObject(const QJsonValue &value) {
+    if (!value.isObject()) {
+        return std::nullopt;
+    }
+    const QJsonObject object = value.toObject();
+    const QJsonValue latitude = object.value(QStringLiteral("latitude"));
+    const QJsonValue longitude = object.value(QStringLiteral("longitude"));
+    if (!latitude.isDouble() || !longitude.isDouble()) {
+        return std::nullopt;
+    }
+    return GeoPosition{latitude.toDouble(), longitude.toDouble()};
+}
+
+QString shapeStorageName(GeofenceShape shape) {
+    switch (shape) {
+    case GeofenceShape::kCircle:
+        return QStringLiteral("circle");
+    case GeofenceShape::kRectangle:
+        return QStringLiteral("rectangle");
+    case GeofenceShape::kPolygon:
+        return QStringLiteral("polygon");
+    }
+    return {};
+}
+
+std::optional<GeofenceShape> shapeFromStorageName(const QString &name) {
+    if (name == QStringLiteral("circle")) {
+        return GeofenceShape::kCircle;
+    }
+    if (name == QStringLiteral("rectangle")) {
+        return GeofenceShape::kRectangle;
+    }
+    if (name == QStringLiteral("polygon")) {
+        return GeofenceShape::kPolygon;
+    }
+    return std::nullopt;
+}
+
+QJsonObject geometryObject(const Geofence &geofence) {
+    if (const auto *circle = std::get_if<CircleGeofence>(&geofence.geometry); circle != nullptr) {
+        return {{QStringLiteral("center"), positionObject(circle->center)},
+                {QStringLiteral("radius_m"), circle->radius_m}};
+    }
+    if (const auto *rectangle = std::get_if<RectangleGeofence>(&geofence.geometry); rectangle != nullptr) {
+        return {{QStringLiteral("southwest"), positionObject(rectangle->southwest)},
+                {QStringLiteral("northeast"), positionObject(rectangle->northeast)}};
+    }
+
+    QJsonArray vertices;
+    for (const GeoPosition &vertex : std::get<PolygonGeofence>(geofence.geometry).vertices) {
+        vertices.append(positionObject(vertex));
+    }
+    return {{QStringLiteral("vertices"), vertices}};
+}
+
+std::optional<GeofenceGeometry> geometryFromObject(GeofenceShape shape, const QJsonObject &object) {
+    switch (shape) {
+    case GeofenceShape::kCircle: {
+        const std::optional<GeoPosition> center = positionFromObject(object.value(QStringLiteral("center")));
+        const QJsonValue radius = object.value(QStringLiteral("radius_m"));
+        if (!center.has_value() || !radius.isDouble()) {
+            return std::nullopt;
+        }
+        return CircleGeofence{center.value(), radius.toDouble()};
+    }
+    case GeofenceShape::kRectangle: {
+        const std::optional<GeoPosition> southwest = positionFromObject(object.value(QStringLiteral("southwest")));
+        const std::optional<GeoPosition> northeast = positionFromObject(object.value(QStringLiteral("northeast")));
+        if (!southwest.has_value() || !northeast.has_value()) {
+            return std::nullopt;
+        }
+        return RectangleGeofence{southwest.value(), northeast.value()};
+    }
+    case GeofenceShape::kPolygon: {
+        const QJsonValue vertices_value = object.value(QStringLiteral("vertices"));
+        if (!vertices_value.isArray()) {
+            return std::nullopt;
+        }
+        QVector<GeoPosition> vertices;
+        for (const QJsonValue &vertex_value : vertices_value.toArray()) {
+            const std::optional<GeoPosition> vertex = positionFromObject(vertex_value);
+            if (!vertex.has_value()) {
+                return std::nullopt;
+            }
+            vertices.append(vertex.value());
+        }
+        return PolygonGeofence{vertices};
+    }
+    }
+    return std::nullopt;
+}
+
+QByteArray geometryJson(const Geofence &geofence) {
+    return QJsonDocument(geometryObject(geofence)).toJson(QJsonDocument::Compact);
 }
 
 } // namespace
@@ -196,6 +300,19 @@ bool HistoryStore::initialize(QString *error_message) {
         !executeSchemaStatement(database,
                                 QStringLiteral("CREATE INDEX IF NOT EXISTS idx_history_targets_type "
                                                "ON history_targets(target_type)"),
+                                error_message) ||
+        !executeSchemaStatement(database,
+                                QStringLiteral("CREATE TABLE IF NOT EXISTS geofences ("
+                                               "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                                               "name TEXT NOT NULL,"
+                                               "shape TEXT NOT NULL CHECK(shape IN "
+                                               "('circle', 'rectangle', 'polygon')),"
+                                               "geometry_json TEXT NOT NULL,"
+                                               "enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),"
+                                               "visible INTEGER NOT NULL CHECK(visible IN (0, 1)),"
+                                               "created_at_ms INTEGER NOT NULL,"
+                                               "updated_at_ms INTEGER NOT NULL"
+                                               ")"),
                                 error_message)) {
         database.close();
         database = QSqlDatabase();
@@ -762,6 +879,259 @@ std::optional<int> HistoryStore::deleteAllSessions(QString *error_message) {
         return std::nullopt;
     }
     return static_cast<int>(deleted_count);
+}
+
+std::optional<QVector<Geofence>> HistoryStore::loadGeofences(QString *error_message) const {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return std::nullopt;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    QSqlQuery query(database);
+    if (!query.exec(QStringLiteral("SELECT id, name, shape, geometry_json, enabled, visible "
+                                   "FROM geofences ORDER BY id"))) {
+        setError(error_message,
+                 storeText(QT_TRANSLATE_NOOP("HistoryStore", "读取电子围栏失败：%1")).arg(query.lastError().text()));
+        return std::nullopt;
+    }
+
+    QVector<Geofence> geofences;
+    while (query.next()) {
+        const std::optional<GeofenceShape> shape = shapeFromStorageName(query.value(2).toString());
+        QJsonParseError parse_error;
+        const QJsonDocument geometry_document = QJsonDocument::fromJson(query.value(3).toByteArray(), &parse_error);
+        if (!shape.has_value() || parse_error.error != QJsonParseError::NoError || !geometry_document.isObject()) {
+            setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏 %1 的几何数据损坏"))
+                                        .arg(query.value(0).toLongLong()));
+            return std::nullopt;
+        }
+        const std::optional<GeofenceGeometry> geometry = geometryFromObject(shape.value(), geometry_document.object());
+        if (!geometry.has_value()) {
+            setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏 %1 的几何数据无效"))
+                                        .arg(query.value(0).toLongLong()));
+            return std::nullopt;
+        }
+
+        Geofence geofence;
+        geofence.id = query.value(0).toLongLong();
+        geofence.name = query.value(1).toString();
+        geofence.geometry = geometry.value();
+        geofence.enabled = query.value(4).toBool();
+        geofence.visible = query.value(5).toBool();
+        const QString validation_error = validateGeofence(geofence);
+        if (!validation_error.isEmpty()) {
+            setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏 %1 无效：%2"))
+                                        .arg(geofence.id)
+                                        .arg(validation_error));
+            return std::nullopt;
+        }
+        geofences.append(geofence);
+    }
+    return geofences;
+}
+
+std::optional<qint64> HistoryStore::createGeofence(const Geofence &geofence, QString *error_message) {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return std::nullopt;
+    }
+    const QString validation_error = validateGeofence(geofence);
+    if (!validation_error.isEmpty()) {
+        setError(error_message, validation_error);
+        return std::nullopt;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    QSqlQuery query(database);
+    query.prepare(
+        QStringLiteral("INSERT INTO geofences("
+                       "name, shape, geometry_json, enabled, visible, "
+                       "created_at_ms, updated_at_ms) "
+                       "VALUES(?, ?, ?, ?, ?, ?, ?)"));
+    const qint64 now_ms = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
+    query.addBindValue(geofence.name.trimmed());
+    query.addBindValue(shapeStorageName(geofenceShape(geofence)));
+    query.addBindValue(QString::fromUtf8(geometryJson(geofence)));
+    query.addBindValue(geofence.enabled);
+    query.addBindValue(geofence.visible);
+    query.addBindValue(now_ms);
+    query.addBindValue(now_ms);
+    if (!query.exec()) {
+        setError(error_message,
+                 storeText(QT_TRANSLATE_NOOP("HistoryStore", "创建电子围栏失败：%1")).arg(query.lastError().text()));
+        return std::nullopt;
+    }
+
+    bool converted = false;
+    const qint64 geofence_id = query.lastInsertId().toLongLong(&converted);
+    if (!converted || geofence_id <= 0) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏已创建但无法读取 ID")));
+        return std::nullopt;
+    }
+    return geofence_id;
+}
+
+bool HistoryStore::updateGeofence(const Geofence &geofence, QString *error_message) {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return false;
+    }
+    if (geofence.id <= 0) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "待更新的电子围栏 ID 无效")));
+        return false;
+    }
+    const QString validation_error = validateGeofence(geofence);
+    if (!validation_error.isEmpty()) {
+        setError(error_message, validation_error);
+        return false;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    QSqlQuery query(database);
+    query.prepare(
+        QStringLiteral("UPDATE geofences SET name = ?, shape = ?, "
+                       "geometry_json = ?, enabled = ?, "
+                       "visible = ?, updated_at_ms = ? WHERE id = ?"));
+    query.addBindValue(geofence.name.trimmed());
+    query.addBindValue(shapeStorageName(geofenceShape(geofence)));
+    query.addBindValue(QString::fromUtf8(geometryJson(geofence)));
+    query.addBindValue(geofence.enabled);
+    query.addBindValue(geofence.visible);
+    query.addBindValue(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());
+    query.addBindValue(geofence.id);
+    if (!query.exec()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "更新电子围栏 %1 失败：%2"))
+                                    .arg(geofence.id)
+                                    .arg(query.lastError().text()));
+        return false;
+    }
+    if (query.numRowsAffected() != 1) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏 %1 不存在")).arg(geofence.id));
+        return false;
+    }
+    return true;
+}
+
+bool HistoryStore::updateGeofenceGeometry(const Geofence &geofence, QString *error_message) {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return false;
+    }
+    if (geofence.id <= 0) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "待更新的电子围栏 ID 无效")));
+        return false;
+    }
+    const QString validation_error = validateGeofence(geofence);
+    if (!validation_error.isEmpty()) {
+        setError(error_message, validation_error);
+        return false;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("UPDATE geofences SET shape = ?, geometry_json = ?, "
+                                 "updated_at_ms = ? WHERE id = ?"));
+    query.addBindValue(shapeStorageName(geofenceShape(geofence)));
+    query.addBindValue(QString::fromUtf8(geometryJson(geofence)));
+    query.addBindValue(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());
+    query.addBindValue(geofence.id);
+    if (!query.exec()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "更新电子围栏 %1 几何失败：%2"))
+                                    .arg(geofence.id)
+                                    .arg(query.lastError().text()));
+        return false;
+    }
+    if (query.numRowsAffected() != 1) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏 %1 不存在")).arg(geofence.id));
+        return false;
+    }
+    return true;
+}
+
+bool HistoryStore::setGeofenceEnabled(qint64 geofence_id, bool enabled, QString *error_message) {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return false;
+    }
+    if (geofence_id <= 0) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "待更新的电子围栏 ID 无效")));
+        return false;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("UPDATE geofences SET enabled = ?, updated_at_ms = ? WHERE id = ?"));
+    query.addBindValue(enabled);
+    query.addBindValue(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());
+    query.addBindValue(geofence_id);
+    if (!query.exec()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "更新电子围栏 %1 启用状态失败：%2"))
+                                    .arg(geofence_id)
+                                    .arg(query.lastError().text()));
+        return false;
+    }
+    if (query.numRowsAffected() != 1) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏 %1 不存在")).arg(geofence_id));
+        return false;
+    }
+    return true;
+}
+
+bool HistoryStore::setGeofenceVisible(qint64 geofence_id, bool visible, QString *error_message) {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return false;
+    }
+    if (geofence_id <= 0) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "待更新的电子围栏 ID 无效")));
+        return false;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("UPDATE geofences SET visible = ?, updated_at_ms = ? WHERE id = ?"));
+    query.addBindValue(visible);
+    query.addBindValue(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());
+    query.addBindValue(geofence_id);
+    if (!query.exec()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "更新电子围栏 %1 显示状态失败：%2"))
+                                    .arg(geofence_id)
+                                    .arg(query.lastError().text()));
+        return false;
+    }
+    if (query.numRowsAffected() != 1) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏 %1 不存在")).arg(geofence_id));
+        return false;
+    }
+    return true;
+}
+
+bool HistoryStore::deleteGeofence(qint64 geofence_id, QString *error_message) {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return false;
+    }
+    if (geofence_id <= 0) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "待删除的电子围栏 ID 无效")));
+        return false;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("DELETE FROM geofences WHERE id = ?"));
+    query.addBindValue(geofence_id);
+    if (!query.exec()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "删除电子围栏 %1 失败：%2"))
+                                    .arg(geofence_id)
+                                    .arg(query.lastError().text()));
+        return false;
+    }
+    if (query.numRowsAffected() != 1) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "电子围栏 %1 不存在")).arg(geofence_id));
+        return false;
+    }
+    return true;
 }
 
 bool HistoryStore::probeWriteAccess(QString *error_message) {

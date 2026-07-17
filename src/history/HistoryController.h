@@ -28,6 +28,13 @@ public slots:
     void exportHistoryCsv(const utms::HistoryExportRequest &request);
     void deleteSession(qint64 session_id);
     void deleteAllSessions();
+    void refreshGeofences();
+    void createGeofence(const utms::Geofence &geofence);
+    void updateGeofence(const utms::Geofence &geofence);
+    void updateGeofenceGeometry(const utms::Geofence &geofence);
+    void setGeofenceEnabled(qint64 geofence_id, bool enabled);
+    void setGeofenceVisible(qint64 geofence_id, bool visible);
+    void deleteGeofence(qint64 geofence_id);
     void refreshHistoryInfo();
     void cleanupExpiredHistory();
     void retryPendingOperations();
@@ -42,6 +49,8 @@ signals:
     void exportCompleted(const QString &output_path, int record_count);
     void sessionDeleted(qint64 session_id);
     void allSessionsDeleted(int session_count);
+    void geofencesLoaded(const QVector<utms::Geofence> &geofences);
+    void geofenceErrorOccurred(const QString &message);
     void databaseSizeChanged(qint64 size_bytes);
     void errorOccurred(const QString &message);
     void stopped();

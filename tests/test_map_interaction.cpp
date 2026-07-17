@@ -4,8 +4,10 @@
 #include <QMouseEvent>
 #include <QtTest>
 
+#include "core/GeofenceTypes.h"
 #include "history/HistoryTypes.h"
 #include "map/OnlineMapState.h"
+#include "map/WebMercator.h"
 #include "ui/MapPanel.h"
 #include "ui/OfflineMapWidget.h"
 
@@ -17,6 +19,10 @@ class MapInteractionTest : public QObject
     void liveFrameDoesNotCancelUserDrag();
     void trajectoryStateSurvivesMapModeSwitch();
     void replayStateSurvivesMapSwitchAndIsNotOverwrittenByLiveFrames();
+    void geofenceStateAndLocationSurviveMapModeSwitch();
+    void offlineGeofenceCanBeDraggedAndEmitsUpdatedGeometry();
+    void offlineRectangleAndPolygonHandlesCanBeDragged();
+    void stalePersistenceEchoDoesNotOverwriteActiveGeofenceEdit();
 };
 
 void MapInteractionTest::liveFrameDoesNotCancelUserDrag()
@@ -135,6 +141,171 @@ void MapInteractionTest::replayStateSurvivesMapSwitchAndIsNotOverwrittenByLiveFr
     QVERIFY(!panel.isReplayMode());
     QCOMPARE(panel.displayedFrame().sequence, std::optional<qint64>(11));
     QVERIFY(!panel.replayTrajectory().has_value());
+}
+
+void MapInteractionTest::geofenceStateAndLocationSurviveMapModeSwitch()
+{
+    utms::Geofence circle;
+    circle.id = 7;
+    circle.name = QStringLiteral("重点区域");
+    circle.enabled = false;
+    circle.visible = true;
+    circle.geometry = utms::CircleGeofence{{25.31, 110.42}, 100.0};
+
+    utms::Geofence polygon;
+    polygon.id = 8;
+    polygon.name = QStringLiteral("隐藏区域");
+    polygon.visible = false;
+    polygon.geometry = utms::PolygonGeofence{{{25.30, 110.40}, {25.32, 110.41}, {25.31, 110.43}}};
+
+    utms::MapPanel panel;
+    panel.setGeofences({circle, polygon});
+    QCOMPARE(panel.geofences().size(), 2);
+    QVERIFY(panel.locateGeofence(7));
+    QCOMPARE(panel.center().latitude, 25.31);
+    QCOMPARE(panel.center().longitude, 110.42);
+
+    panel.setMapMode(utms::MapMode::kOffline);
+    panel.setMapMode(utms::MapMode::kOnline);
+
+    QCOMPARE(panel.geofences().size(), 2);
+    QCOMPARE(panel.geofences().at(0).enabled, false);
+    QCOMPARE(panel.geofences().at(1).visible, false);
+    QVERIFY(!panel.locateGeofence(999));
+}
+
+void MapInteractionTest::offlineGeofenceCanBeDraggedAndEmitsUpdatedGeometry()
+{
+    utms::OfflineMapWidget widget;
+    widget.resize(800, 600);
+    widget.show();
+
+    utms::Geofence geofence;
+    geofence.id = 17;
+    geofence.name = QStringLiteral("可拖动圆形");
+    geofence.geometry = utms::CircleGeofence{{25.311724, 110.416819}, 100.0};
+    widget.setView({25.311724, 110.416819}, 17);
+    widget.setGeofences({geofence});
+    widget.setEditableGeofenceId(geofence.id);
+    QCoreApplication::processEvents();
+
+    QSignalSpy edit_spy(&widget, &utms::OfflineMapWidget::geofenceEdited);
+    // Start inside the circle but away from its center/radius handles to exercise whole-shape movement.
+    const QPoint start = widget.viewport()->rect().center() + QPoint(0, 30);
+    const QPoint destination = start + QPoint(45, 25);
+    QTest::mousePress(widget.viewport(), Qt::LeftButton, Qt::NoModifier, start);
+    QTest::mouseMove(widget.viewport(), destination, 50);
+    QTest::mouseRelease(widget.viewport(), Qt::LeftButton, Qt::NoModifier, destination);
+
+    QTRY_COMPARE(edit_spy.count(), 1);
+    const utms::Geofence edited = qvariant_cast<utms::Geofence>(edit_spy.takeFirst().at(0));
+    const auto circle = std::get<utms::CircleGeofence>(edited.geometry);
+    QVERIFY(circle.center.longitude > 110.416819);
+    QVERIFY(circle.center.latitude < 25.311724);
+    QCOMPARE(circle.radius_m, 100.0);
+}
+
+void MapInteractionTest::offlineRectangleAndPolygonHandlesCanBeDragged()
+{
+    {
+        utms::OfflineMapWidget widget;
+        widget.resize(800, 600);
+        widget.show();
+        widget.setView({25.311724, 110.416819}, 17);
+
+        utms::Geofence rectangle;
+        rectangle.id = 21;
+        rectangle.name = QStringLiteral("可编辑矩形");
+        rectangle.geometry = utms::RectangleGeofence{{25.3107, 110.4158}, {25.3127, 110.4178}};
+        widget.setGeofences({rectangle});
+        widget.setEditableGeofenceId(rectangle.id);
+        QCoreApplication::processEvents();
+
+        QSignalSpy edit_spy(&widget, &utms::OfflineMapWidget::geofenceEdited);
+        const QPoint start =
+            widget.mapFromScene(utms::WebMercator::geoToGlobalPixel({25.3107, 110.4158}, 17));
+        const QPoint destination = start + QPoint(-18, 16);
+        QTest::mousePress(widget.viewport(), Qt::LeftButton, Qt::NoModifier, start);
+        QTest::mouseMove(widget.viewport(), destination, 50);
+        QTest::mouseRelease(widget.viewport(), Qt::LeftButton, Qt::NoModifier, destination);
+
+        QTRY_COMPARE(edit_spy.count(), 1);
+        const utms::Geofence edited = qvariant_cast<utms::Geofence>(edit_spy.takeFirst().at(0));
+        const auto geometry = std::get<utms::RectangleGeofence>(edited.geometry);
+        QVERIFY(geometry.southwest.latitude < 25.3107);
+        QVERIFY(geometry.southwest.longitude < 110.4158);
+        QCOMPARE(geometry.northeast.latitude, 25.3127);
+        QCOMPARE(geometry.northeast.longitude, 110.4178);
+    }
+
+    {
+        utms::OfflineMapWidget widget;
+        widget.resize(800, 600);
+        widget.show();
+        widget.setView({25.311724, 110.416819}, 17);
+
+        utms::Geofence polygon;
+        polygon.id = 22;
+        polygon.name = QStringLiteral("可编辑多边形");
+        polygon.geometry =
+            utms::PolygonGeofence{{{25.3107, 110.4158}, {25.3127, 110.4168}, {25.3107, 110.4178}}};
+        widget.setGeofences({polygon});
+        widget.setEditableGeofenceId(polygon.id);
+        QCoreApplication::processEvents();
+
+        QSignalSpy edit_spy(&widget, &utms::OfflineMapWidget::geofenceEdited);
+        const QPoint start =
+            widget.mapFromScene(utms::WebMercator::geoToGlobalPixel({25.3107, 110.4158}, 17));
+        const QPoint destination = start + QPoint(-16, 12);
+        QTest::mousePress(widget.viewport(), Qt::LeftButton, Qt::NoModifier, start);
+        QTest::mouseMove(widget.viewport(), destination, 50);
+        QTest::mouseRelease(widget.viewport(), Qt::LeftButton, Qt::NoModifier, destination);
+
+        QTRY_COMPARE(edit_spy.count(), 1);
+        const utms::Geofence edited = qvariant_cast<utms::Geofence>(edit_spy.takeFirst().at(0));
+        const auto geometry = std::get<utms::PolygonGeofence>(edited.geometry);
+        QVERIFY(geometry.vertices.constFirst().latitude < 25.3107);
+        QVERIFY(geometry.vertices.constFirst().longitude < 110.4158);
+        QCOMPARE(geometry.vertices.size(), 3);
+    }
+}
+
+void MapInteractionTest::stalePersistenceEchoDoesNotOverwriteActiveGeofenceEdit()
+{
+    utms::Geofence original;
+    original.id = 31;
+    original.name = QStringLiteral("异步保存围栏");
+    original.geometry = utms::CircleGeofence{{25.311724, 110.416819}, 100.0};
+
+    utms::MapPanel panel;
+    panel.setMapMode(utms::MapMode::kOffline);
+    panel.setGeofences({original});
+    QVERIFY(panel.setEditableGeofenceId(original.id));
+
+    auto *offline_map = panel.findChild<utms::OfflineMapWidget *>();
+    QVERIFY(offline_map != nullptr);
+    utms::Geofence edited = original;
+    edited.geometry = utms::CircleGeofence{{25.3125, 110.4180}, 140.0};
+    offline_map->geofenceEdited(edited);
+
+    QCOMPARE(std::get<utms::CircleGeofence>(panel.geofences().constFirst().geometry).radius_m, 140.0);
+    panel.setGeofences({original});
+    QCOMPARE(std::get<utms::CircleGeofence>(panel.geofences().constFirst().geometry).radius_m, 140.0);
+
+    panel.discardPendingGeofenceEdits();
+    QCOMPARE(std::get<utms::CircleGeofence>(panel.geofences().constFirst().geometry).radius_m, 100.0);
+
+    QVERIFY(panel.setEditableGeofenceId(original.id));
+    offline_map->geofenceEdited(edited);
+    utms::Geofence disabled = original;
+    disabled.enabled = false;
+    panel.setGeofences({disabled});
+    QCOMPARE(std::get<utms::CircleGeofence>(panel.geofences().constFirst().geometry).radius_m, 140.0);
+    QVERIFY(!panel.geofences().constFirst().enabled);
+
+    panel.setGeofences({edited});
+    panel.setGeofences({original});
+    QCOMPARE(std::get<utms::CircleGeofence>(panel.geofences().constFirst().geometry).radius_m, 100.0);
 }
 
 int main(int argc, char *argv[])

@@ -22,6 +22,13 @@
 (() => {
     const targetMarkers = new Map();
     let trajectoryPolylines = [];
+    let geofenceOverlays = [];
+    const geofenceOverlayById = new Map();
+    let editableGeofenceId = null;
+    let geofenceEditor = null;
+    let geofenceEditorEntry = null;
+    let geofenceEditTimer = null;
+    let pendingGeofenceEditEntry = null;
     let bridge;
     let map;
     let radarMarker;
@@ -123,6 +130,109 @@
         if (trajectoryPolylines.length > 0) map.add(trajectoryPolylines);
     };
 
+    const lngLatObject = lngLat => ({
+        longitude: typeof lngLat.getLng === 'function' ? lngLat.getLng() : lngLat.lng,
+        latitude: typeof lngLat.getLat === 'function' ? lngLat.getLat() : lngLat.lat
+    });
+
+    const reportGeofenceEdit = entry => {
+        const {geofence, overlay} = entry;
+        const edited = {id: geofence.id, shape: geofence.shape};
+        if (geofence.shape === 'circle') {
+            edited.center = lngLatObject(overlay.getCenter());
+            edited.radiusM = overlay.getRadius();
+        } else if (geofence.shape === 'rectangle') {
+            const bounds = overlay.getBounds();
+            edited.southwest = lngLatObject(bounds.getSouthWest());
+            edited.northeast = lngLatObject(bounds.getNorthEast());
+        } else {
+            edited.vertices = overlay.getPath().map(lngLatObject);
+        }
+        bridge.reportGeofenceEdited(edited);
+    };
+
+    const scheduleGeofenceEditReport = entry => {
+        clearTimeout(geofenceEditTimer);
+        pendingGeofenceEditEntry = entry;
+        geofenceEditTimer = setTimeout(() => {
+            geofenceEditTimer = null;
+            pendingGeofenceEditEntry = null;
+            reportGeofenceEdit(entry);
+        }, 120);
+    };
+
+    const closeGeofenceEditor = () => {
+        if (geofenceEditTimer && pendingGeofenceEditEntry) reportGeofenceEdit(pendingGeofenceEditEntry);
+        clearTimeout(geofenceEditTimer);
+        geofenceEditTimer = null;
+        pendingGeofenceEditEntry = null;
+        if (geofenceEditor) geofenceEditor.close();
+        if (geofenceEditorEntry) geofenceEditorEntry.overlay.setOptions({draggable: false, cursor: 'default'});
+        geofenceEditor = null;
+        geofenceEditorEntry = null;
+    };
+
+    const openGeofenceEditor = () => {
+        closeGeofenceEditor();
+        const entry = geofenceOverlayById.get(String(editableGeofenceId));
+        if (!entry) return;
+        const editorName = entry.geofence.shape === 'circle' ? 'AMap.CircleEditor'
+            : entry.geofence.shape === 'rectangle' ? 'AMap.RectangleEditor' : 'AMap.PolygonEditor';
+        map.plugin([editorName], () => {
+            if (String(editableGeofenceId) !== String(entry.geofence.id)
+                    || geofenceOverlayById.get(String(entry.geofence.id)) !== entry) return;
+            const Editor = editorName === 'AMap.CircleEditor' ? AMap.CircleEditor
+                : editorName === 'AMap.RectangleEditor' ? AMap.RectangleEditor : AMap.PolygonEditor;
+            geofenceEditor = new Editor(map, entry.overlay);
+            geofenceEditorEntry = entry;
+            geofenceEditor.on('adjust', () => scheduleGeofenceEditReport(entry));
+            geofenceEditor.on('move', () => scheduleGeofenceEditReport(entry));
+            entry.overlay.on('dragend', () => scheduleGeofenceEditReport(entry));
+            entry.overlay.setOptions({draggable: true, cursor: 'move'});
+            geofenceEditor.open();
+        });
+    };
+
+    const setEditableGeofence = geofenceId => {
+        editableGeofenceId = geofenceId || null;
+        openGeofenceEditor();
+    };
+
+    const replaceGeofences = geofences => {
+        closeGeofenceEditor();
+        if (geofenceOverlays.length > 0) map.remove(geofenceOverlays);
+        geofenceOverlays = [];
+        geofenceOverlayById.clear();
+        geofences.forEach(geofence => {
+            const strokeColor = geofence.enabled ? '#1677ff' : '#7f8c8d';
+            const common = {
+                strokeColor,
+                strokeWeight: 2,
+                strokeStyle: geofence.enabled ? 'solid' : 'dashed',
+                fillColor: strokeColor,
+                fillOpacity: 0.12,
+                zIndex: 105,
+                extData: geofence
+            };
+            let overlay;
+            if (geofence.shape === 'circle') {
+                overlay = new AMap.Circle({...common, center: position(geofence.center),
+                    radius: geofence.radiusM});
+            } else if (geofence.shape === 'rectangle') {
+                const bounds = new AMap.Bounds(position(geofence.southwest), position(geofence.northeast));
+                overlay = new AMap.Rectangle({...common, bounds});
+            } else {
+                overlay = new AMap.Polygon({...common, path: geofence.vertices.map(position)});
+            }
+            overlay.on('mouseover', () => overlay.setOptions({fillOpacity: 0.2}));
+            overlay.on('mouseout', () => overlay.setOptions({fillOpacity: 0.12}));
+            geofenceOverlays.push(overlay);
+            geofenceOverlayById.set(String(geofence.id), {geofence, overlay});
+        });
+        if (geofenceOverlays.length > 0) map.add(geofenceOverlays);
+        openGeofenceEditor();
+    };
+
     const updateRadar = radar => {
         if (!radarMarker) {
             radarMarker = new AMap.Marker({anchor: 'center', content: markerContent('#000000'),
@@ -148,6 +258,7 @@
         state.targets.forEach(upsertTarget);
         setSelection(state.selectedTrackId || null);
         replaceTrajectories(state.trajectories || []);
+        replaceGeofences(state.geofences || []);
     };
 
     const applyUpdate = update => {
@@ -170,6 +281,8 @@
         bridge.layerUpdated.connect(setLayer);
         bridge.selectionUpdated.connect(setSelection);
         bridge.trajectoriesUpdated.connect(replaceTrajectories);
+        bridge.geofencesUpdated.connect(replaceGeofences);
+        bridge.geofenceEditingUpdated.connect(setEditableGeofence);
 
         const script = document.createElement('script');
         script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(bridge.apiKey)}&plugin=AMap.Scale,AMap.ToolBar`;

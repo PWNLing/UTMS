@@ -50,4 +50,9 @@ void MapWebBridge::reportTargetClicked(const QString &track_id)
     }
 }
 
+void MapWebBridge::reportGeofenceEdited(const QJsonObject &geofence)
+{
+    emit geofenceEdited(geofence);
+}
+
 } // namespace utms

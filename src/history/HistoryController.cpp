@@ -22,7 +22,9 @@ HistoryController::HistoryController(QObject *parent)
     qRegisterMetaType<HistoryQuery>();
     qRegisterMetaType<HistoryQueryResult>();
     qRegisterMetaType<HistoryExportRequest>();
+    qRegisterMetaType<Geofence>();
     qRegisterMetaType<QVector<HistorySession>>();
+    qRegisterMetaType<QVector<Geofence>>();
     retry_timer_->setInterval(kDatabaseRetryIntervalMs);
     connect(retry_timer_, &QTimer::timeout, this, &HistoryController::retryPendingOperations);
     maintenance_timer_->setInterval(kMaintenanceIntervalMs);
@@ -176,6 +178,123 @@ void HistoryController::deleteAllSessions() {
     refreshHistoryInfo();
 }
 
+void HistoryController::refreshGeofences() {
+    if (shutting_down_ || store_ == nullptr) {
+        return;
+    }
+
+    QString error;
+    const std::optional<QVector<Geofence>> geofences = store_->loadGeofences(&error);
+    if (!geofences.has_value()) {
+        qWarning() << "HistoryController: failed to load geofences" << error;
+        emit geofenceErrorOccurred(error);
+        return;
+    }
+    emit geofencesLoaded(geofences.value());
+}
+
+void HistoryController::createGeofence(const Geofence &geofence) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit geofenceErrorOccurred(tr("历史数据库不可用，无法创建电子围栏"));
+        return;
+    }
+
+    QString error;
+    const std::optional<qint64> geofence_id = store_->createGeofence(geofence, &error);
+    if (!geofence_id.has_value()) {
+        qWarning() << "HistoryController: failed to create geofence" << error;
+        emit geofenceErrorOccurred(error);
+        return;
+    }
+    qInfo() << "HistoryController: created geofence" << geofence_id.value() << geofence.name;
+    refreshGeofences();
+}
+
+void HistoryController::updateGeofence(const Geofence &geofence) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit geofenceErrorOccurred(tr("历史数据库不可用，无法更新电子围栏"));
+        return;
+    }
+
+    QString error;
+    if (!store_->updateGeofence(geofence, &error)) {
+        qWarning() << "HistoryController: failed to update geofence" << geofence.id << error;
+        emit geofenceErrorOccurred(error);
+        refreshGeofences();
+        return;
+    }
+    qInfo() << "HistoryController: updated geofence" << geofence.id << "enabled" << geofence.enabled << "visible"
+            << geofence.visible;
+    refreshGeofences();
+}
+
+void HistoryController::updateGeofenceGeometry(const Geofence &geofence) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit geofenceErrorOccurred(tr("历史数据库不可用，无法更新电子围栏几何"));
+        return;
+    }
+
+    QString error;
+    if (!store_->updateGeofenceGeometry(geofence, &error)) {
+        qWarning() << "HistoryController: failed to update geofence geometry" << geofence.id << error;
+        emit geofenceErrorOccurred(error);
+        refreshGeofences();
+        return;
+    }
+    qInfo() << "HistoryController: updated geofence geometry" << geofence.id;
+    refreshGeofences();
+}
+
+void HistoryController::setGeofenceEnabled(qint64 geofence_id, bool enabled) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit geofenceErrorOccurred(tr("历史数据库不可用，无法更新电子围栏启用状态"));
+        return;
+    }
+
+    QString error;
+    if (!store_->setGeofenceEnabled(geofence_id, enabled, &error)) {
+        qWarning() << "HistoryController: failed to set geofence enabled" << geofence_id << error;
+        emit geofenceErrorOccurred(error);
+        refreshGeofences();
+        return;
+    }
+    qInfo() << "HistoryController: set geofence enabled" << geofence_id << enabled;
+    refreshGeofences();
+}
+
+void HistoryController::setGeofenceVisible(qint64 geofence_id, bool visible) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit geofenceErrorOccurred(tr("历史数据库不可用，无法更新电子围栏显示状态"));
+        return;
+    }
+
+    QString error;
+    if (!store_->setGeofenceVisible(geofence_id, visible, &error)) {
+        qWarning() << "HistoryController: failed to set geofence visible" << geofence_id << error;
+        emit geofenceErrorOccurred(error);
+        refreshGeofences();
+        return;
+    }
+    qInfo() << "HistoryController: set geofence visible" << geofence_id << visible;
+    refreshGeofences();
+}
+
+void HistoryController::deleteGeofence(qint64 geofence_id) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit geofenceErrorOccurred(tr("历史数据库不可用，无法删除电子围栏"));
+        return;
+    }
+
+    QString error;
+    if (!store_->deleteGeofence(geofence_id, &error)) {
+        qWarning() << "HistoryController: failed to delete geofence" << geofence_id << error;
+        emit geofenceErrorOccurred(error);
+        return;
+    }
+    qInfo() << "HistoryController: deleted geofence" << geofence_id;
+    refreshGeofences();
+}
+
 void HistoryController::refreshHistoryInfo() {
     if (shutting_down_ || store_ == nullptr) {
         return;
@@ -323,6 +442,7 @@ void HistoryController::retryInitializationSteps() {
         last_error_message_.clear();
         emit availabilityChanged(true, tr("历史数据库已就绪"));
         refreshHistoryInfo();
+        refreshGeofences();
     }
 }
 

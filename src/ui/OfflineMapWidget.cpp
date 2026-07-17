@@ -14,6 +14,7 @@
 #include <QGraphicsSimpleTextItem>
 #include <QImage>
 #include <QLabel>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -23,6 +24,7 @@
 #include <QWheelEvent>
 #include <QtConcurrentRun>
 
+#include "core/GeofenceGeometry.h"
 #include "map/WebMercator.h"
 
 namespace utms
@@ -31,6 +33,10 @@ namespace
 {
 
 constexpr int kTrackIdDataRole = 1;
+constexpr int kGeofenceIdDataRole = 2;
+constexpr int kGeofenceHandleDataRole = 3;
+constexpr int kWholeGeofenceHandle = -1;
+constexpr double kInitialResolutionMpp = 156'543.03392;
 
 QString optionalMeasurement(const std::optional<double> &measurement)
 {
@@ -117,6 +123,18 @@ void OfflineMapWidget::setTrajectories(const QVector<RealtimeTrajectory> &trajec
     updateTrajectoryItems();
 }
 
+void OfflineMapWidget::setGeofences(const QVector<Geofence> &geofences)
+{
+    geofences_ = geofences;
+    updateGeofenceItems();
+}
+
+void OfflineMapWidget::setEditableGeofenceId(std::optional<qint64> geofence_id)
+{
+    editable_geofence_id_ = geofence_id;
+    updateGeofenceItems();
+}
+
 void OfflineMapWidget::setView(const GeoPosition &center, int zoom)
 {
     center_ = center;
@@ -128,6 +146,7 @@ void OfflineMapWidget::setView(const GeoPosition &center, int zoom)
     applying_view_ = false;
     updateMarkers();
     updateTrajectoryItems();
+    updateGeofenceItems();
     updateTiles();
 }
 
@@ -150,6 +169,11 @@ void OfflineMapWidget::mousePressEvent(QMouseEvent *event)
         {
             emit targetClicked(track_id.toLongLong());
         }
+        const QVariant geofence_id = clicked_item->data(kGeofenceIdDataRole);
+        if (geofence_id.isValid() && editable_geofence_id_ == geofence_id.toLongLong())
+        {
+            active_geofence_edit_item_ = clicked_item;
+        }
     }
     QGraphicsView::mousePressEvent(event);
 }
@@ -157,6 +181,113 @@ void OfflineMapWidget::mousePressEvent(QMouseEvent *event)
 void OfflineMapWidget::mouseReleaseEvent(QMouseEvent *event)
 {
     QGraphicsView::mouseReleaseEvent(event);
+    if (active_geofence_edit_item_ != nullptr)
+    {
+        QGraphicsItem *edited_item = active_geofence_edit_item_;
+        active_geofence_edit_item_ = nullptr;
+        const qint64 geofence_id = edited_item->data(kGeofenceIdDataRole).toLongLong();
+        const int handle_index = edited_item->data(kGeofenceHandleDataRole).toInt();
+        const auto current =
+            std::find_if(geofences_.begin(), geofences_.end(),
+                         [geofence_id](const Geofence &candidate) { return candidate.id == geofence_id; });
+        if (current != geofences_.end())
+        {
+            Geofence edited = *current;
+            if (handle_index == kWholeGeofenceHandle)
+            {
+                const QPointF offset_px = edited_item->pos();
+                const auto translated = [this, offset_px](const GeoPosition &position)
+                {
+                    return WebMercator::globalPixelToGeo(WebMercator::geoToGlobalPixel(position, zoom_) + offset_px,
+                                                         zoom_);
+                };
+                if (auto *circle = std::get_if<CircleGeofence>(&edited.geometry); circle != nullptr)
+                {
+                    circle->center = translated(circle->center);
+                }
+                else if (auto *rectangle = std::get_if<RectangleGeofence>(&edited.geometry); rectangle != nullptr)
+                {
+                    rectangle->southwest = translated(rectangle->southwest);
+                    rectangle->northeast = translated(rectangle->northeast);
+                }
+                else
+                {
+                    auto &vertices = std::get<PolygonGeofence>(edited.geometry).vertices;
+                    for (GeoPosition &vertex : vertices)
+                    {
+                        vertex = translated(vertex);
+                    }
+                }
+            }
+            else
+            {
+                const GeoPosition position = WebMercator::globalPixelToGeo(edited_item->scenePos(), zoom_);
+                if (auto *circle = std::get_if<CircleGeofence>(&edited.geometry); circle != nullptr)
+                {
+                    if (handle_index == 0)
+                    {
+                        circle->center = position;
+                    }
+                    else
+                    {
+                        const QPointF center_px = WebMercator::geoToGlobalPixel(circle->center, zoom_);
+                        const double radius_px = QLineF(center_px, edited_item->scenePos()).length();
+                        const double latitude_radians = circle->center.latitude * 3.14159265358979323846 / 180.0;
+                        const double meters_per_pixel =
+                            kInitialResolutionMpp * std::cos(latitude_radians) /
+                            static_cast<double>(quint64{1} << zoom_);
+                        circle->radius_m = radius_px * meters_per_pixel;
+                    }
+                }
+                else if (auto *rectangle = std::get_if<RectangleGeofence>(&edited.geometry); rectangle != nullptr)
+                {
+                    double south = rectangle->southwest.latitude;
+                    double west = rectangle->southwest.longitude;
+                    double north = rectangle->northeast.latitude;
+                    double east = rectangle->northeast.longitude;
+                    if (handle_index == 0 || handle_index == 1)
+                    {
+                        south = position.latitude;
+                    }
+                    else
+                    {
+                        north = position.latitude;
+                    }
+                    if (handle_index == 0 || handle_index == 3)
+                    {
+                        west = position.longitude;
+                    }
+                    else
+                    {
+                        east = position.longitude;
+                    }
+                    rectangle->southwest = {std::min(south, north), std::min(west, east)};
+                    rectangle->northeast = {std::max(south, north), std::max(west, east)};
+                }
+                else
+                {
+                    auto &vertices = std::get<PolygonGeofence>(edited.geometry).vertices;
+                    if (handle_index >= 0 && handle_index < vertices.size())
+                    {
+                        vertices[handle_index] = position;
+                    }
+                }
+            }
+
+            const QString validation_error = validateGeofence(edited);
+            if (validation_error.isEmpty())
+            {
+                *current = edited;
+                emit geofenceEdited(edited);
+            }
+            else
+            {
+                qWarning() << "OfflineMapWidget: rejected invalid geofence edit" << geofence_id << validation_error;
+                emit geofenceEditError(validation_error);
+            }
+            updateGeofenceItems();
+        }
+    }
     center_ = WebMercator::globalPixelToGeo(mapToScene(viewport()->rect().center()), zoom_);
     updateTiles();
     emit viewChanged(center_, zoom_);
@@ -292,6 +423,120 @@ void OfflineMapWidget::updateTrajectoryItems()
             QGraphicsPathItem *item = map_scene_->addPath(path, pen);
             item->setZValue(10.0);
             trajectory_items_.append(item);
+        }
+    }
+}
+
+void OfflineMapWidget::updateGeofenceItems()
+{
+    active_geofence_edit_item_ = nullptr;
+    geofence_handle_items_.clear();
+    for (QGraphicsPathItem *item : std::as_const(geofence_items_))
+    {
+        map_scene_->removeItem(item);
+        delete item;
+    }
+    geofence_items_.clear();
+
+    for (const Geofence &geofence : std::as_const(geofences_))
+    {
+        if (!geofence.visible)
+        {
+            continue;
+        }
+
+        QPainterPath path;
+        if (const auto *circle = std::get_if<CircleGeofence>(&geofence.geometry); circle != nullptr)
+        {
+            const QPointF center_px = WebMercator::geoToGlobalPixel(circle->center, zoom_);
+            const double latitude_radians = circle->center.latitude * 3.14159265358979323846 / 180.0;
+            const double meters_per_pixel =
+                kInitialResolutionMpp * std::cos(latitude_radians) / static_cast<double>(quint64{1} << zoom_);
+            const double radius_px = circle->radius_m / meters_per_pixel;
+            path.addEllipse(center_px, radius_px, radius_px);
+        }
+        else
+        {
+            QVector<GeoPosition> vertices;
+            if (const auto *rectangle = std::get_if<RectangleGeofence>(&geofence.geometry); rectangle != nullptr)
+            {
+                vertices = {{rectangle->southwest.latitude, rectangle->southwest.longitude},
+                            {rectangle->southwest.latitude, rectangle->northeast.longitude},
+                            {rectangle->northeast.latitude, rectangle->northeast.longitude},
+                            {rectangle->northeast.latitude, rectangle->southwest.longitude}};
+            }
+            else
+            {
+                vertices = std::get<PolygonGeofence>(geofence.geometry).vertices;
+            }
+            if (!vertices.isEmpty())
+            {
+                path.moveTo(WebMercator::geoToGlobalPixel(vertices.constFirst(), zoom_));
+                for (qsizetype vertex_index = 1; vertex_index < vertices.size(); ++vertex_index)
+                {
+                    path.lineTo(WebMercator::geoToGlobalPixel(vertices.at(vertex_index), zoom_));
+                }
+                path.closeSubpath();
+            }
+        }
+
+        QColor stroke_color(geofence.enabled ? QStringLiteral("#1677ff") : QStringLiteral("#7f8c8d"));
+        QColor fill_color = stroke_color;
+        fill_color.setAlpha(32);
+        QPen pen(stroke_color, 2.0, geofence.enabled ? Qt::SolidLine : Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+        pen.setCosmetic(true);
+        QGraphicsPathItem *item = map_scene_->addPath(path, pen, QBrush(fill_color));
+        item->setToolTip(geofence.name);
+        item->setZValue(5.0);
+        item->setData(kGeofenceIdDataRole, geofence.id);
+        item->setData(kGeofenceHandleDataRole, kWholeGeofenceHandle);
+        const bool editable = editable_geofence_id_ == geofence.id;
+        item->setFlag(QGraphicsItem::ItemIsMovable, editable);
+        geofence_items_.append(item);
+
+        if (!editable)
+        {
+            continue;
+        }
+
+        QVector<QPointF> handle_positions;
+        if (const auto *circle = std::get_if<CircleGeofence>(&geofence.geometry); circle != nullptr)
+        {
+            const QPointF center_px = WebMercator::geoToGlobalPixel(circle->center, zoom_);
+            const double latitude_radians = circle->center.latitude * 3.14159265358979323846 / 180.0;
+            const double meters_per_pixel =
+                kInitialResolutionMpp * std::cos(latitude_radians) / static_cast<double>(quint64{1} << zoom_);
+            handle_positions = {center_px, center_px + QPointF(circle->radius_m / meters_per_pixel, 0.0)};
+        }
+        else if (const auto *rectangle = std::get_if<RectangleGeofence>(&geofence.geometry); rectangle != nullptr)
+        {
+            handle_positions = {
+                WebMercator::geoToGlobalPixel(rectangle->southwest, zoom_),
+                WebMercator::geoToGlobalPixel(
+                    {rectangle->southwest.latitude, rectangle->northeast.longitude}, zoom_),
+                WebMercator::geoToGlobalPixel(rectangle->northeast, zoom_),
+                WebMercator::geoToGlobalPixel(
+                    {rectangle->northeast.latitude, rectangle->southwest.longitude}, zoom_)};
+        }
+        else
+        {
+            for (const GeoPosition &vertex : std::get<PolygonGeofence>(geofence.geometry).vertices)
+            {
+                handle_positions.append(WebMercator::geoToGlobalPixel(vertex, zoom_));
+            }
+        }
+
+        for (qsizetype handle_index = 0; handle_index < handle_positions.size(); ++handle_index)
+        {
+            auto *handle = new QGraphicsEllipseItem(-5.0, -5.0, 10.0, 10.0, item);
+            handle->setPos(handle_positions.at(handle_index));
+            handle->setPen(QPen(Qt::white, 2.0));
+            handle->setBrush(QColor(QStringLiteral("#1677ff")));
+            handle->setZValue(1.0);
+            handle->setFlag(QGraphicsItem::ItemIsMovable, true);
+            handle->setData(kGeofenceIdDataRole, geofence.id);
+            handle->setData(kGeofenceHandleDataRole, handle_index);
+            geofence_handle_items_.append(handle);
         }
     }
 }

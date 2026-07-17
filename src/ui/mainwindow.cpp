@@ -29,6 +29,7 @@
 #include "media/RtspController.h"
 #include "network/UdpReceiver.h"
 #include "ui/BottomStatusBar.h"
+#include "ui/GeofenceManagerWidget.h"
 #include "ui/HistoryQueryWidget.h"
 #include "ui/MapPanel.h"
 #include "ui/StatisticsWidget.h"
@@ -41,6 +42,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     qRegisterMetaType<utms::UdpStatus>();
     qRegisterMetaType<utms::RtspConnectionState>();
     qRegisterMetaType<utms::HistoryConfiguration>();
+    qRegisterMetaType<utms::Geofence>();
     setupUi();
     setupPlaybackController();
     handleUdpStatusChanged(utms::UdpStatus::kStopped, tr("UDP 未启动"));
@@ -167,6 +169,10 @@ void MainWindow::handleHistoryAvailabilityChanged(bool available, const QString 
     updateHistoryStatusLabel(detail, color);
     history_query_widget_->setAvailable(available);
     history_query_widget_->showStatus(detail, !available);
+    geofence_manager_widget_->setAvailable(available);
+    if (!available) {
+        geofence_manager_widget_->showStatus(detail, true);
+    }
 }
 
 void MainWindow::handleHistorySessionActiveChanged(bool active, const QString &detail) {
@@ -194,6 +200,17 @@ void MainWindow::handleHistoryExportCompleted(const QString &output_path, int re
 
 void MainWindow::handleHistoryDatabaseSizeChanged(qint64 size_bytes) {
     history_query_widget_->setDatabaseSizeBytes(size_bytes);
+}
+
+void MainWindow::handleGeofencesLoaded(const QVector<utms::Geofence> &geofences) {
+    map_panel_->setGeofences(geofences);
+    geofence_manager_widget_->setGeofences(map_panel_->geofences());
+}
+
+void MainWindow::handleGeofenceError(const QString &message) {
+    map_panel_->discardPendingGeofenceEdits();
+    geofence_manager_widget_->setGeofences(map_panel_->geofences());
+    geofence_manager_widget_->showStatus(tr("电子围栏错误：%1").arg(message), true);
 }
 
 void MainWindow::handleReplayModeChanged(bool replay_mode) {
@@ -380,6 +397,39 @@ void MainWindow::setupUi() {
     connect(history_query_widget_, &utms::HistoryQueryWidget::refreshRequested, this,
             &MainWindow::refreshHistoryInfoRequested);
 
+    geofence_manager_widget_ = new utms::GeofenceManagerWidget(configuration_tabs);
+    configuration_tabs->addTab(geofence_manager_widget_, tr("电子围栏"));
+    connect(geofence_manager_widget_, &utms::GeofenceManagerWidget::createRequested, this,
+            &MainWindow::createGeofenceRequested);
+    connect(geofence_manager_widget_, &utms::GeofenceManagerWidget::updateRequested, this,
+            &MainWindow::updateGeofenceRequested);
+    connect(geofence_manager_widget_, &utms::GeofenceManagerWidget::enabledChangeRequested, this,
+            &MainWindow::setGeofenceEnabledRequested);
+    connect(geofence_manager_widget_, &utms::GeofenceManagerWidget::visibilityChangeRequested, this,
+            &MainWindow::setGeofenceVisibleRequested);
+    connect(geofence_manager_widget_, &utms::GeofenceManagerWidget::deleteRequested, this,
+            &MainWindow::deleteGeofenceRequested);
+    connect(geofence_manager_widget_, &utms::GeofenceManagerWidget::locateRequested, this, [this](qint64 geofence_id) {
+        if (!map_panel_->locateGeofence(geofence_id)) {
+            geofence_manager_widget_->showStatus(tr("无法定位：电子围栏不存在"), true);
+        }
+    });
+    connect(geofence_manager_widget_, &utms::GeofenceManagerWidget::mapEditRequested, this,
+            [this](std::optional<qint64> geofence_id) {
+                if (!map_panel_->setEditableGeofenceId(geofence_id)) {
+                    geofence_manager_widget_->showStatus(tr("无法开启地图编辑：请先显示该围栏"), true);
+                }
+            });
+    connect(map_panel_, &utms::MapPanel::geofenceEditingChanged, geofence_manager_widget_,
+            &utms::GeofenceManagerWidget::setEditingGeofenceId);
+    connect(map_panel_, &utms::MapPanel::geofenceEdited, this, [this](const utms::Geofence &geofence) {
+        geofence_manager_widget_->applyMapEditedGeofence(geofence);
+        emit updateGeofenceGeometryRequested(geofence);
+    });
+    connect(map_panel_, &utms::MapPanel::geofenceEditError, this, [this](const QString &message) {
+        geofence_manager_widget_->showStatus(tr("地图编辑无效：%1，已恢复原围栏").arg(message), true);
+    });
+
     data_splitter->addWidget(track_table_);
     data_splitter->addWidget(configuration_tabs);
     data_splitter->setStretchFactor(0, 55);
@@ -525,6 +575,15 @@ void MainWindow::setupHistoryController() {
             &utms::HistoryController::deleteAllSessions);
     connect(this, &MainWindow::refreshHistoryInfoRequested, history_controller_,
             &utms::HistoryController::refreshHistoryInfo);
+    connect(this, &MainWindow::createGeofenceRequested, history_controller_, &utms::HistoryController::createGeofence);
+    connect(this, &MainWindow::updateGeofenceRequested, history_controller_, &utms::HistoryController::updateGeofence);
+    connect(this, &MainWindow::updateGeofenceGeometryRequested, history_controller_,
+            &utms::HistoryController::updateGeofenceGeometry);
+    connect(this, &MainWindow::setGeofenceEnabledRequested, history_controller_,
+            &utms::HistoryController::setGeofenceEnabled);
+    connect(this, &MainWindow::setGeofenceVisibleRequested, history_controller_,
+            &utms::HistoryController::setGeofenceVisible);
+    connect(this, &MainWindow::deleteGeofenceRequested, history_controller_, &utms::HistoryController::deleteGeofence);
     connect(this, &MainWindow::shutdownHistoryWorkerRequested, history_controller_, &utms::HistoryController::shutdown);
     connect(history_controller_, &utms::HistoryController::configurationLoaded, this,
             &MainWindow::handleHistoryConfigurationLoaded);
@@ -540,6 +599,9 @@ void MainWindow::setupHistoryController() {
             &MainWindow::handleHistoryExportCompleted);
     connect(history_controller_, &utms::HistoryController::databaseSizeChanged, this,
             &MainWindow::handleHistoryDatabaseSizeChanged);
+    connect(history_controller_, &utms::HistoryController::geofencesLoaded, this, &MainWindow::handleGeofencesLoaded);
+    connect(history_controller_, &utms::HistoryController::geofenceErrorOccurred, this,
+            &MainWindow::handleGeofenceError);
     connect(history_controller_, &utms::HistoryController::sessionDeleted, this, [this](qint64 session_id) {
         history_query_widget_->showStatus(tr("历史会话 #%1 已删除").arg(session_id), false);
     });
