@@ -5,9 +5,12 @@
 #include <QComboBox>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalSpy>
 #include <QSlider>
 #include <QTimer>
+#include <QVBoxLayout>
 
 #include "ui/HistoryQueryWidget.h"
 
@@ -18,6 +21,7 @@ private slots:
     void deleteAllSessionsRequiresConfirmation();
     void deleteAllSessionsIsDisabledWhileRecording();
     void queriedFramesEnableTheRequiredPlaybackControls();
+    void constrainedHeightKeepsPlaybackControlsVisibleAndScrollsManagementContent();
 };
 
 void HistoryQueryWidgetTest::deleteAllSessionsRequiresConfirmation() {
@@ -120,6 +124,29 @@ void HistoryQueryWidgetTest::queriedFramesEnableTheRequiredPlaybackControls() {
     QCOMPARE(rate_combo_box->count(), 4);
     QCOMPARE(rate_combo_box->itemData(0).toDouble(), 0.5);
     QCOMPARE(rate_combo_box->itemData(3).toDouble(), 4.0);
+}
+
+void HistoryQueryWidgetTest::constrainedHeightKeepsPlaybackControlsVisibleAndScrollsManagementContent() {
+    utms::HistoryQueryWidget widget;
+    widget.resize(480, 320);
+    widget.show();
+    QTest::qWait(20);
+
+    auto *playback_group = widget.findChild<QWidget *>(QStringLiteral("historyPlaybackGroupBox"));
+    auto *management_scroll_area =
+        widget.findChild<QScrollArea *>(QStringLiteral("historyManagementScrollArea"));
+    QVERIFY(playback_group != nullptr);
+    QVERIFY(management_scroll_area != nullptr);
+    QCOMPARE(widget.size(), QSize(480, 320));
+    QVERIFY(playback_group->isVisibleTo(&widget));
+    QVERIFY(management_scroll_area->isVisibleTo(&widget));
+    QVERIFY(management_scroll_area->verticalScrollBar()->maximum() > 0);
+    QCOMPARE(management_scroll_area->horizontalScrollBar()->maximum(), 0);
+
+    auto *outer_layout = qobject_cast<QVBoxLayout *>(widget.layout());
+    QVERIFY(outer_layout != nullptr);
+    QCOMPARE(outer_layout->indexOf(playback_group), 0);
+    QCOMPARE(outer_layout->indexOf(management_scroll_area), 1);
 }
 
 QTEST_MAIN(HistoryQueryWidgetTest)

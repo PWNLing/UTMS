@@ -15,6 +15,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
+#include <QScrollArea>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -91,6 +92,8 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
     end_time_edit_->setCalendarPopup(true);
     start_time_edit_->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     end_time_edit_->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    start_time_edit_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    end_time_edit_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
 
     session_combo_box_->addItem(tr("全部会话"));
     track_id_line_edit_->setPlaceholderText(tr("全部航迹"));
@@ -115,42 +118,55 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
 
     auto *query_group = new QGroupBox(tr("查询条件"), this);
     auto *query_layout = new QGridLayout(query_group);
-    query_layout->addWidget(time_range_check_box_, 0, 0);
-    query_layout->addWidget(new QLabel(tr("开始"), query_group), 0, 1);
-    query_layout->addWidget(start_time_edit_, 0, 2);
-    query_layout->addWidget(new QLabel(tr("结束"), query_group), 1, 1);
-    query_layout->addWidget(end_time_edit_, 1, 2);
-    query_layout->addWidget(new QLabel(tr("会话"), query_group), 2, 0);
-    query_layout->addWidget(session_combo_box_, 2, 1, 1, 2);
-    query_layout->addWidget(new QLabel(tr("航迹 ID"), query_group), 3, 0);
-    query_layout->addWidget(track_id_line_edit_, 3, 1);
-    query_layout->addWidget(new QLabel(tr("类别"), query_group), 3, 2);
-    query_layout->addWidget(target_type_combo_box_, 3, 3);
-    query_layout->addWidget(query_button_, 4, 2);
-    query_layout->addWidget(refresh_button_, 4, 3);
-    query_layout->setColumnStretch(2, 1);
+    query_layout->addWidget(time_range_check_box_, 0, 0, 1, 2);
+    query_layout->addWidget(new QLabel(tr("开始"), query_group), 1, 0);
+    query_layout->addWidget(start_time_edit_, 1, 1);
+    query_layout->addWidget(new QLabel(tr("结束"), query_group), 2, 0);
+    query_layout->addWidget(end_time_edit_, 2, 1);
+    query_layout->addWidget(new QLabel(tr("会话"), query_group), 3, 0);
+    query_layout->addWidget(session_combo_box_, 3, 1);
+    query_layout->addWidget(new QLabel(tr("航迹 ID"), query_group), 4, 0);
+    query_layout->addWidget(track_id_line_edit_, 4, 1);
+    query_layout->addWidget(new QLabel(tr("类别"), query_group), 5, 0);
+    query_layout->addWidget(target_type_combo_box_, 5, 1);
+    auto *query_actions_layout = new QHBoxLayout();
+    query_actions_layout->addStretch();
+    query_actions_layout->addWidget(query_button_);
+    query_actions_layout->addWidget(refresh_button_);
+    query_layout->addLayout(query_actions_layout, 6, 0, 1, 2);
+    query_layout->setColumnStretch(1, 1);
 
     auto *playback_group = new QGroupBox(tr("历史回放"), this);
-    auto *playback_layout = new QGridLayout(playback_group);
-    playback_layout->addWidget(playback_mode_label_, 0, 0);
-    playback_layout->addWidget(enter_replay_button_, 0, 1);
-    playback_layout->addWidget(return_live_button_, 0, 2);
-    playback_layout->addWidget(previous_frame_button_, 1, 0);
-    playback_layout->addWidget(play_button_, 1, 1);
-    playback_layout->addWidget(pause_button_, 1, 2);
-    playback_layout->addWidget(next_frame_button_, 1, 3);
-    playback_layout->addWidget(new QLabel(tr("速度"), playback_group), 1, 4);
-    playback_layout->addWidget(playback_rate_combo_box_, 1, 5);
-    playback_layout->addWidget(playback_timeline_slider_, 2, 0, 1, 5);
-    playback_layout->addWidget(playback_position_label_, 2, 5);
-    playback_layout->setColumnStretch(3, 1);
+    playback_group->setObjectName(QStringLiteral("historyPlaybackGroupBox"));
+    auto *playback_layout = new QVBoxLayout(playback_group);
+    auto *mode_layout = new QHBoxLayout();
+    mode_layout->addWidget(playback_mode_label_);
+    mode_layout->addWidget(enter_replay_button_);
+    mode_layout->addWidget(return_live_button_);
+    mode_layout->addStretch();
+    mode_layout->addWidget(new QLabel(tr("速度"), playback_group));
+    mode_layout->addWidget(playback_rate_combo_box_);
+    auto *navigation_layout = new QHBoxLayout();
+    navigation_layout->addWidget(previous_frame_button_);
+    navigation_layout->addWidget(play_button_);
+    navigation_layout->addWidget(pause_button_);
+    navigation_layout->addWidget(next_frame_button_);
+    navigation_layout->addStretch();
+    auto *timeline_layout = new QHBoxLayout();
+    timeline_layout->addWidget(playback_timeline_slider_, 1);
+    timeline_layout->addWidget(playback_position_label_);
+    playback_layout->addLayout(mode_layout);
+    playback_layout->addLayout(navigation_layout);
+    playback_layout->addLayout(timeline_layout);
+    playback_layout->setContentsMargins(8, 8, 8, 8);
+    playback_layout->setSpacing(4);
 
-    auto *management_group = new QGroupBox(tr("存储管理"), this);
-    auto *management_layout = new QHBoxLayout(management_group);
-    management_layout->addWidget(database_size_label_);
-    management_layout->addStretch();
-    management_layout->addWidget(delete_session_button_);
-    management_layout->addWidget(delete_all_sessions_button_);
+    auto *storage_group = new QGroupBox(tr("存储管理"), this);
+    auto *storage_layout = new QHBoxLayout(storage_group);
+    storage_layout->addWidget(database_size_label_);
+    storage_layout->addStretch();
+    storage_layout->addWidget(delete_session_button_);
+    storage_layout->addWidget(delete_all_sessions_button_);
 
     auto *export_group = new QGroupBox(tr("CSV 导出"), this);
     auto *export_layout = new QGridLayout(export_group);
@@ -160,14 +176,31 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
     export_layout->addWidget(export_track_button_, 1, 2);
     export_layout->setColumnStretch(1, 1);
 
+    auto *management_content = new QWidget(this);
+    auto *management_content_layout = new QVBoxLayout(management_content);
+    management_content_layout->setContentsMargins(0, 0, 4, 0);
+    management_content_layout->addWidget(query_group);
+    management_content_layout->addWidget(storage_group);
+    management_content_layout->addWidget(export_group);
+    management_content_layout->addWidget(result_label_);
+    management_content_layout->addWidget(status_label_);
+    management_content_layout->addStretch();
+
+    auto *management_scroll_area = new QScrollArea(this);
+    management_scroll_area->setObjectName(QStringLiteral("historyManagementScrollArea"));
+    management_scroll_area->setWidgetResizable(true);
+    management_scroll_area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    management_scroll_area->setFrameShape(QFrame::NoFrame);
+    management_scroll_area->setSizeAdjustPolicy(QAbstractScrollArea::AdjustIgnored);
+    management_scroll_area->setMinimumHeight(0);
+    management_scroll_area->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+    management_scroll_area->setWidget(management_content);
+
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(query_group);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->setSpacing(6);
     layout->addWidget(playback_group);
-    layout->addWidget(management_group);
-    layout->addWidget(export_group);
-    layout->addWidget(result_label_);
-    layout->addWidget(status_label_);
-    layout->addStretch();
+    layout->addWidget(management_scroll_area, 1);
 
     connect(time_range_check_box_, &QCheckBox::toggled, start_time_edit_, &QWidget::setEnabled);
     connect(time_range_check_box_, &QCheckBox::toggled, end_time_edit_, &QWidget::setEnabled);
