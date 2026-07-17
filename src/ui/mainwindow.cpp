@@ -23,6 +23,7 @@
 
 #include "core/RadarTypes.h"
 #include "history/HistoryController.h"
+#include "history/HistoryPlaybackController.h"
 #include "history/HistoryStore.h"
 #include "map/OnlineMapState.h"
 #include "media/RtspController.h"
@@ -41,6 +42,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     qRegisterMetaType<utms::RtspConnectionState>();
     qRegisterMetaType<utms::HistoryConfiguration>();
     setupUi();
+    setupPlaybackController();
     handleUdpStatusChanged(utms::UdpStatus::kStopped, tr("UDP 未启动"));
     setupHistoryController();
     setupUdpWorker();
@@ -194,8 +196,42 @@ void MainWindow::handleHistoryDatabaseSizeChanged(qint64 size_bytes) {
     history_query_widget_->setDatabaseSizeBytes(size_bytes);
 }
 
+void MainWindow::handleReplayModeChanged(bool replay_mode) {
+    replay_mode_ = replay_mode;
+    map_panel_->setReplayMode(replay_mode);
+    history_query_widget_->setReplayMode(replay_mode);
+    bottom_status_bar_->setReplayState(replay_mode, false);
+    setWindowTitle(replay_mode ? tr("GUET-UTMS 历史回放") : tr("GUET-UTMS 实时雷达显示"));
+
+    if (!replay_mode && latest_live_frame_.has_value()) {
+        updateNonMapDisplays(latest_live_frame_.value());
+    }
+}
+
+void MainWindow::handlePlaybackStateChanged(bool playing) {
+    history_query_widget_->setPlaying(playing);
+    bottom_status_bar_->setReplayState(replay_mode_, playing);
+}
+
+void MainWindow::handlePlaybackFrameChanged(const utms::RadarFrame &frame, int frame_index, int frame_count,
+                                            const QDateTime &frame_time) {
+    if (!replay_mode_) {
+        return;
+    }
+    map_panel_->setReplayFrame(frame);
+    updateNonMapDisplays(frame);
+    history_query_widget_->setPlaybackPosition(frame_index, frame_count, frame_time);
+}
+
 void MainWindow::updateCurrentFrame(const utms::RadarFrame &frame) {
     map_panel_->setFrame(frame);
+    latest_live_frame_ = frame;
+    if (!replay_mode_) {
+        updateNonMapDisplays(frame);
+    }
+}
+
+void MainWindow::updateNonMapDisplays(const utms::RadarFrame &frame) {
     track_table_->replaceTracks(frame.tracks);
     statistics_widget_->updateStatistics(frame.statistics);
     bottom_status_bar_->updateStatistics(frame.statistics);
@@ -399,15 +435,66 @@ void MainWindow::setupUi() {
         if (!map_panel_->selectTarget(track_id, true)) {
             qWarning() << "MainWindow: failed to select table track" << track_id;
         }
+        selectReplayTrack(track_id);
     });
     connect(map_panel_, &utms::MapPanel::targetClicked, this, [this](qint64 track_id) {
         const bool selected_row_visible = track_table_->selectTrackById(track_id);
         if (!selected_row_visible && track_table_->selectedTrackId() != std::optional<qint64>(track_id)) {
             qWarning() << "MainWindow: failed to select map track in table" << track_id;
         }
+        selectReplayTrack(track_id);
     });
-    connect(track_table_, &utms::TrackTableWidget::targetSelectionCleared, this,
-            [this]() { map_panel_->clearSelectionForMissingTarget(); });
+    connect(track_table_, &utms::TrackTableWidget::targetSelectionCleared, this, [this]() {
+        map_panel_->clearSelectionForMissingTarget();
+        if (replay_mode_ && playback_controller_ != nullptr) {
+            playback_controller_->clearSelectedTrackId();
+        }
+    });
+}
+
+void MainWindow::setupPlaybackController() {
+    playback_controller_ = new utms::HistoryPlaybackController(this);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::replayRequested, this,
+            [this](const utms::HistoryQueryResult &result) {
+                if (!playback_controller_->beginReplay(result)) {
+                    history_query_widget_->showStatus(tr("无法进入回放：查询结果中没有可用帧"), true);
+                }
+            });
+    connect(history_query_widget_, &utms::HistoryQueryWidget::returnLiveRequested, playback_controller_,
+            &utms::HistoryPlaybackController::returnToLive);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::playRequested, playback_controller_,
+            &utms::HistoryPlaybackController::play);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::pauseRequested, playback_controller_,
+            &utms::HistoryPlaybackController::pause);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::previousFrameRequested, playback_controller_,
+            &utms::HistoryPlaybackController::previousFrame);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::nextFrameRequested, playback_controller_,
+            &utms::HistoryPlaybackController::nextFrame);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::seekRequested, playback_controller_,
+            &utms::HistoryPlaybackController::seekTo);
+    connect(history_query_widget_, &utms::HistoryQueryWidget::playbackRateRequested, this, [this](double rate) {
+        if (!playback_controller_->setPlaybackRate(rate)) {
+            qWarning() << "MainWindow: rejected unsupported history playback rate" << rate;
+        }
+    });
+    connect(playback_controller_, &utms::HistoryPlaybackController::replayModeChanged, this,
+            &MainWindow::handleReplayModeChanged);
+    connect(playback_controller_, &utms::HistoryPlaybackController::playbackStateChanged, this,
+            &MainWindow::handlePlaybackStateChanged);
+    connect(playback_controller_, &utms::HistoryPlaybackController::frameChanged, this,
+            &MainWindow::handlePlaybackFrameChanged);
+    connect(playback_controller_, &utms::HistoryPlaybackController::dataGapSkipped, history_query_widget_,
+            &utms::HistoryQueryWidget::showDataGap);
+    connect(playback_controller_, &utms::HistoryPlaybackController::selectedTrajectoryChanged, map_panel_,
+            &utms::MapPanel::setReplayTrajectory);
+    connect(playback_controller_, &utms::HistoryPlaybackController::selectedTrajectoryCleared, map_panel_,
+            &utms::MapPanel::clearReplayTrajectory);
+}
+
+void MainWindow::selectReplayTrack(qint64 track_id) {
+    if (replay_mode_ && playback_controller_ != nullptr) {
+        playback_controller_->setSelectedTrackId(track_id);
+    }
 }
 
 void MainWindow::setupHistoryController() {

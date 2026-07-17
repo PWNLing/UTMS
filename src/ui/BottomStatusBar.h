@@ -18,11 +18,13 @@ public:
 
     void updateStatistics(const TargetStatistics &statistics);
     void setUdpStatus(UdpStatus status);
+    void setReplayState(bool replay_mode, bool playing);
 
 private:
     void updateSimulatedFrameRate();
 
     std::array<QLabel *, 5> count_labels_{};
+    QLabel *display_mode_label_ = nullptr;
     QLabel *udp_status_label_ = nullptr;
     QLabel *frame_rate_label_ = nullptr;
     QTimer *frame_rate_timer_ = nullptr;

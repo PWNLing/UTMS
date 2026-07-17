@@ -44,6 +44,68 @@ MapPanel::MapPanel(QWidget *parent)
 void MapPanel::setFrame(const RadarFrame &frame)
 {
     trajectory_model_.replaceFrame(frame);
+    latest_live_frame_ = frame;
+    if (replay_mode_)
+    {
+        return;
+    }
+    renderDisplayFrame(frame);
+}
+
+void MapPanel::setReplayMode(bool replay_mode)
+{
+    if (replay_mode_ == replay_mode)
+    {
+        return;
+    }
+
+    replay_mode_ = replay_mode;
+    replay_trajectory_.reset();
+    if (replay_mode_)
+    {
+        renderTrajectories(QDateTime::currentDateTime());
+        return;
+    }
+
+    state_.setSelectedTrackId(std::nullopt);
+    trajectory_model_.setSelectedTrackId(std::nullopt);
+    if (latest_live_frame_.has_value())
+    {
+        renderDisplayFrame(latest_live_frame_.value());
+    }
+    else
+    {
+        renderTrajectories(QDateTime::currentDateTime());
+    }
+}
+
+void MapPanel::setReplayFrame(const RadarFrame &frame)
+{
+    if (!replay_mode_)
+    {
+        return;
+    }
+    renderDisplayFrame(frame);
+}
+
+void MapPanel::setReplayTrajectory(const HistoryReplayTrajectory &trajectory)
+{
+    if (!replay_mode_)
+    {
+        return;
+    }
+    replay_trajectory_ = trajectory;
+    renderTrajectories(QDateTime::currentDateTime());
+}
+
+void MapPanel::clearReplayTrajectory()
+{
+    replay_trajectory_.reset();
+    renderTrajectories(QDateTime::currentDateTime());
+}
+
+void MapPanel::renderDisplayFrame(const RadarFrame &frame)
+{
     const std::optional<qint64> previous_selection = state_.selectedTrackId();
     const OnlineMapUpdate update = state_.replaceFrame(frame);
     const QDateTime render_time = frame.received_at.isValid() ? frame.received_at : QDateTime::currentDateTime();
@@ -104,7 +166,10 @@ bool MapPanel::setSelectedTrackId(std::optional<qint64> track_id)
     {
         return false;
     }
-    trajectory_model_.setSelectedTrackId(track_id);
+    if (!replay_mode_)
+    {
+        trajectory_model_.setSelectedTrackId(track_id);
+    }
     applySelectionToActiveMap(track_id);
     renderTrajectories(QDateTime::currentDateTime());
     return true;
@@ -182,6 +247,21 @@ std::optional<qint64> MapPanel::selectedTrackId() const
     return state_.selectedTrackId();
 }
 
+const RadarFrame &MapPanel::displayedFrame() const
+{
+    return state_.currentFrame();
+}
+
+bool MapPanel::isReplayMode() const
+{
+    return replay_mode_;
+}
+
+std::optional<HistoryReplayTrajectory> MapPanel::replayTrajectory() const
+{
+    return replay_trajectory_;
+}
+
 QVector<RealtimeTrajectory> MapPanel::realtimeTrajectories(const QDateTime &now) const
 {
     return trajectory_model_.visibleTrajectories(now);
@@ -229,7 +309,8 @@ void MapPanel::applyViewToActiveMap()
 
 void MapPanel::renderTrajectories(const QDateTime &now)
 {
-    const QVector<RealtimeTrajectory> trajectories = trajectory_model_.visibleTrajectories(now);
+    const QVector<RealtimeTrajectory> trajectories =
+        replay_mode_ ? replayTrajectories() : trajectory_model_.visibleTrajectories(now);
     if (map_mode_ == MapMode::kOnline)
     {
         online_map_->setTrajectories(trajectories);
@@ -238,6 +319,24 @@ void MapPanel::renderTrajectories(const QDateTime &now)
     {
         offline_map_->setTrajectories(trajectories);
     }
+}
+
+QVector<RealtimeTrajectory> MapPanel::replayTrajectories() const
+{
+    if (!replay_trajectory_.has_value())
+    {
+        return {};
+    }
+
+    RealtimeTrajectory trajectory;
+    trajectory.track_id = replay_trajectory_->track_id;
+    trajectory.type = replay_trajectory_->type;
+    trajectory.selected = true;
+    for (const QVector<GeoPosition> &segment : replay_trajectory_->segments)
+    {
+        trajectory.segments.append({segment, 1.0});
+    }
+    return {trajectory};
 }
 
 void MapPanel::synchronizeActiveMap()

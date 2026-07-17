@@ -59,6 +59,12 @@ struct HistoryQueryResult {
     }
 };
 
+struct HistoryReplayTrajectory {
+    qint64 track_id = 0;
+    TargetType type = TargetType::kUnknown;
+    QVector<QVector<GeoPosition>> segments;
+};
+
 struct HistoryExportRequest {
     HistoryQuery query;
     std::optional<qint64> selected_track_id;
@@ -74,4 +80,5 @@ Q_DECLARE_METATYPE(utms::HistorySession)
 Q_DECLARE_METATYPE(utms::HistoryQuery)
 Q_DECLARE_METATYPE(utms::HistoryFrameRecord)
 Q_DECLARE_METATYPE(utms::HistoryQueryResult)
+Q_DECLARE_METATYPE(utms::HistoryReplayTrajectory)
 Q_DECLARE_METATYPE(utms::HistoryExportRequest)

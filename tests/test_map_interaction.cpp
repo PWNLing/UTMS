@@ -4,6 +4,7 @@
 #include <QMouseEvent>
 #include <QtTest>
 
+#include "history/HistoryTypes.h"
 #include "map/OnlineMapState.h"
 #include "ui/MapPanel.h"
 #include "ui/OfflineMapWidget.h"
@@ -15,6 +16,7 @@ class MapInteractionTest : public QObject
     private slots:
     void liveFrameDoesNotCancelUserDrag();
     void trajectoryStateSurvivesMapModeSwitch();
+    void replayStateSurvivesMapSwitchAndIsNotOverwrittenByLiveFrames();
 };
 
 void MapInteractionTest::liveFrameDoesNotCancelUserDrag()
@@ -93,6 +95,46 @@ void MapInteractionTest::trajectoryStateSurvivesMapModeSwitch()
     const QVector<utms::RealtimeTrajectory> trajectories = panel.realtimeTrajectories(second_frame.received_at);
     QCOMPARE(trajectories.size(), 1);
     QCOMPARE(trajectories.constFirst().segments.constFirst().points.size(), 2);
+}
+
+void MapInteractionTest::replayStateSurvivesMapSwitchAndIsNotOverwrittenByLiveFrames()
+{
+    utms::RadarFrame live_frame;
+    live_frame.received_at = QDateTime::fromMSecsSinceEpoch(10'000, QTimeZone::UTC);
+    live_frame.sequence = 10;
+    live_frame.tracks = {{1, utms::TargetType::kCar, {25.0, 110.0}}};
+
+    utms::RadarFrame replay_frame;
+    replay_frame.received_at = QDateTime::fromMSecsSinceEpoch(2'000, QTimeZone::UTC);
+    replay_frame.sequence = 2;
+    replay_frame.tracks = {{42, utms::TargetType::kPedestrian, {25.1, 110.1}}};
+
+    utms::HistoryReplayTrajectory trajectory;
+    trajectory.track_id = 42;
+    trajectory.type = utms::TargetType::kPedestrian;
+    trajectory.segments = {{{25.0, 110.0}, {25.1, 110.1}}};
+
+    utms::MapPanel panel;
+    panel.setFrame(live_frame);
+    panel.setReplayMode(true);
+    panel.setReplayFrame(replay_frame);
+    panel.setReplayTrajectory(trajectory);
+
+    live_frame.sequence = 11;
+    live_frame.received_at = QDateTime::fromMSecsSinceEpoch(11'000, QTimeZone::UTC);
+    panel.setFrame(live_frame);
+    QCOMPARE(panel.displayedFrame().sequence, std::optional<qint64>(2));
+
+    panel.setMapMode(utms::MapMode::kOffline);
+    panel.setMapMode(utms::MapMode::kOnline);
+    QVERIFY(panel.isReplayMode());
+    QCOMPARE(panel.replayTrajectory()->track_id, 42);
+    QCOMPARE(panel.replayTrajectory()->segments.constFirst().size(), 2);
+
+    panel.setReplayMode(false);
+    QVERIFY(!panel.isReplayMode());
+    QCOMPARE(panel.displayedFrame().sequence, std::optional<qint64>(11));
+    QVERIFY(!panel.replayTrajectory().has_value());
 }
 
 int main(int argc, char *argv[])

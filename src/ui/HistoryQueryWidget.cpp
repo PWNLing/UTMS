@@ -16,10 +16,14 @@
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QSet>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <QVBoxLayout>
 
 namespace utms {
 namespace {
+
+constexpr int kTimelineSteps = 10'000;
 
 QString sessionStateText(HistorySessionState state) {
     switch (state) {
@@ -61,10 +65,24 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
       delete_all_sessions_button_(new QPushButton(tr("删除所有会话"), this)),
       export_query_button_(new QPushButton(tr("导出当前查询"), this)), export_track_combo_box_(new QComboBox(this)),
       export_track_button_(new QPushButton(tr("导出选中航迹"), this)),
+      enter_replay_button_(new QPushButton(tr("进入回放"), this)),
+      return_live_button_(new QPushButton(tr("返回实时"), this)), play_button_(new QPushButton(tr("播放"), this)),
+      pause_button_(new QPushButton(tr("暂停"), this)), previous_frame_button_(new QPushButton(tr("上一帧"), this)),
+      next_frame_button_(new QPushButton(tr("下一帧"), this)),
+      playback_timeline_slider_(new QSlider(Qt::Horizontal, this)), playback_rate_combo_box_(new QComboBox(this)),
+      playback_mode_label_(new QLabel(tr("实时模式"), this)), playback_position_label_(new QLabel(tr("-- / --"), this)),
       database_size_label_(new QLabel(tr("数据库占用：--"), this)), result_label_(new QLabel(tr("尚未查询"), this)),
       status_label_(new QLabel(tr("历史数据库初始化中"), this)) {
     delete_session_button_->setObjectName(QStringLiteral("deleteSessionButton"));
     delete_all_sessions_button_->setObjectName(QStringLiteral("deleteAllSessionsButton"));
+    enter_replay_button_->setObjectName(QStringLiteral("enterReplayButton"));
+    return_live_button_->setObjectName(QStringLiteral("returnLiveButton"));
+    play_button_->setObjectName(QStringLiteral("playButton"));
+    pause_button_->setObjectName(QStringLiteral("pauseButton"));
+    previous_frame_button_->setObjectName(QStringLiteral("previousFrameButton"));
+    next_frame_button_->setObjectName(QStringLiteral("nextFrameButton"));
+    playback_timeline_slider_->setObjectName(QStringLiteral("playbackTimelineSlider"));
+    playback_rate_combo_box_->setObjectName(QStringLiteral("playbackRateComboBox"));
     time_range_check_box_->setChecked(true);
     const QDateTime current_time = QDateTime::currentDateTime();
     start_time_edit_->setDateTime(current_time.addDays(-1));
@@ -87,6 +105,13 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
     export_track_combo_box_->setEnabled(false);
     export_query_button_->setEnabled(false);
     export_track_button_->setEnabled(false);
+    playback_timeline_slider_->setRange(0, kTimelineSteps);
+    playback_rate_combo_box_->addItem(tr("0.5×"), 0.5);
+    playback_rate_combo_box_->addItem(tr("1×"), 1.0);
+    playback_rate_combo_box_->addItem(tr("2×"), 2.0);
+    playback_rate_combo_box_->addItem(tr("4×"), 4.0);
+    playback_rate_combo_box_->setCurrentIndex(1);
+    playback_mode_label_->setStyleSheet(QStringLiteral("QLabel { color: #208a4b; font-weight: 700; }"));
 
     auto *query_group = new QGroupBox(tr("查询条件"), this);
     auto *query_layout = new QGridLayout(query_group);
@@ -105,6 +130,21 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
     query_layout->addWidget(refresh_button_, 4, 3);
     query_layout->setColumnStretch(2, 1);
 
+    auto *playback_group = new QGroupBox(tr("历史回放"), this);
+    auto *playback_layout = new QGridLayout(playback_group);
+    playback_layout->addWidget(playback_mode_label_, 0, 0);
+    playback_layout->addWidget(enter_replay_button_, 0, 1);
+    playback_layout->addWidget(return_live_button_, 0, 2);
+    playback_layout->addWidget(previous_frame_button_, 1, 0);
+    playback_layout->addWidget(play_button_, 1, 1);
+    playback_layout->addWidget(pause_button_, 1, 2);
+    playback_layout->addWidget(next_frame_button_, 1, 3);
+    playback_layout->addWidget(new QLabel(tr("速度"), playback_group), 1, 4);
+    playback_layout->addWidget(playback_rate_combo_box_, 1, 5);
+    playback_layout->addWidget(playback_timeline_slider_, 2, 0, 1, 5);
+    playback_layout->addWidget(playback_position_label_, 2, 5);
+    playback_layout->setColumnStretch(3, 1);
+
     auto *management_group = new QGroupBox(tr("存储管理"), this);
     auto *management_layout = new QHBoxLayout(management_group);
     management_layout->addWidget(database_size_label_);
@@ -122,6 +162,7 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
 
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(query_group);
+    layout->addWidget(playback_group);
     layout->addWidget(management_group);
     layout->addWidget(export_group);
     layout->addWidget(result_label_);
@@ -139,7 +180,23 @@ HistoryQueryWidget::HistoryQueryWidget(QWidget *parent)
     connect(export_track_button_, &QPushButton::clicked, this, [this]() { handleExportRequested(true); });
     connect(session_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int) { updateSessionActions(); });
+    connect(enter_replay_button_, &QPushButton::clicked, this, [this]() {
+        if (last_result_.has_value() && !last_result_->frames.isEmpty()) {
+            emit replayRequested(last_result_.value());
+        }
+    });
+    connect(return_live_button_, &QPushButton::clicked, this, &HistoryQueryWidget::returnLiveRequested);
+    connect(play_button_, &QPushButton::clicked, this, &HistoryQueryWidget::playRequested);
+    connect(pause_button_, &QPushButton::clicked, this, &HistoryQueryWidget::pauseRequested);
+    connect(previous_frame_button_, &QPushButton::clicked, this, &HistoryQueryWidget::previousFrameRequested);
+    connect(next_frame_button_, &QPushButton::clicked, this, &HistoryQueryWidget::nextFrameRequested);
+    connect(playback_timeline_slider_, &QSlider::sliderPressed, this, &HistoryQueryWidget::pauseRequested);
+    connect(playback_timeline_slider_, &QSlider::sliderReleased, this, &HistoryQueryWidget::handleTimelineReleased);
+    connect(playback_rate_combo_box_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        emit playbackRateRequested(playback_rate_combo_box_->itemData(index).toDouble());
+    });
     setAvailable(false);
+    updatePlaybackActions();
 }
 
 HistoryQuery HistoryQueryWidget::currentQuery() const {
@@ -200,6 +257,7 @@ void HistoryQueryWidget::setAvailable(bool available) {
     export_track_combo_box_->setEnabled(has_tracks);
     export_track_button_->setEnabled(has_tracks);
     updateSessionActions();
+    updatePlaybackActions();
 }
 
 void HistoryQueryWidget::applyQueryResult(const HistoryQueryResult &result) {
@@ -229,7 +287,59 @@ void HistoryQueryWidget::applyQueryResult(const HistoryQueryResult &result) {
     export_query_button_->setEnabled(has_frames);
     export_track_combo_box_->setEnabled(has_tracks);
     export_track_button_->setEnabled(has_tracks);
+    playback_frame_index_ = -1;
+    playback_frame_count_ = result.frames.size();
+    if (!result.frames.isEmpty()) {
+        playback_position_label_->setText(tr("-- / %1").arg(result.frames.size()));
+    }
+    updatePlaybackActions();
     showStatus(tr("查询完成"), false);
+}
+
+void HistoryQueryWidget::setReplayMode(bool replay_mode) {
+    replay_mode_ = replay_mode;
+    if (!replay_mode_) {
+        playing_ = false;
+        playback_frame_index_ = -1;
+        playback_mode_label_->setText(tr("实时模式"));
+        playback_mode_label_->setStyleSheet(QStringLiteral("QLabel { color: #208a4b; font-weight: 700; }"));
+    } else {
+        playback_mode_label_->setText(tr("历史回放模式"));
+        playback_mode_label_->setStyleSheet(QStringLiteral("QLabel { color: #d35400; font-weight: 700; }"));
+    }
+    updatePlaybackActions();
+}
+
+void HistoryQueryWidget::setPlaying(bool playing) {
+    playing_ = replay_mode_ && playing;
+    updatePlaybackActions();
+}
+
+void HistoryQueryWidget::setPlaybackPosition(int frame_index, int frame_count, const QDateTime &frame_time) {
+    playback_frame_index_ = frame_index;
+    playback_frame_count_ = frame_count;
+    if (last_result_.has_value() && !last_result_->frames.isEmpty()) {
+        const QDateTime start_time = last_result_->frames.constFirst().frame_time;
+        const QDateTime end_time = last_result_->frames.constLast().frame_time;
+        const qint64 duration_ms = start_time.msecsTo(end_time);
+        const int slider_position =
+            duration_ms > 0
+                ? static_cast<int>(qBound<qint64>(0LL, start_time.msecsTo(frame_time) * kTimelineSteps / duration_ms,
+                                                 static_cast<qint64>(kTimelineSteps)))
+                : 0;
+        const QSignalBlocker blocker(playback_timeline_slider_);
+        playback_timeline_slider_->setValue(slider_position);
+    }
+    playback_position_label_->setText(
+        tr("%1 / %2 · %3")
+            .arg(frame_index + 1)
+            .arg(frame_count)
+            .arg(frame_time.toLocalTime().toString(QStringLiteral("HH:mm:ss"))));
+    updatePlaybackActions();
+}
+
+void HistoryQueryWidget::showDataGap(qint64 gap_ms) {
+    showStatus(tr("数据中断 %1 秒，已跳到下一帧").arg(static_cast<double>(gap_ms) / 1'000.0, 0, 'f', 1), true);
 }
 
 void HistoryQueryWidget::showExportCompleted(const QString &output_path, int record_count) {
@@ -321,6 +431,34 @@ void HistoryQueryWidget::updateSessionActions() {
     delete_session_button_->setEnabled(available_ && selected_session_is_deletable);
     delete_all_sessions_button_->setEnabled(available_ && !sessions_.isEmpty() && !has_active_session);
     delete_all_sessions_button_->setToolTip(has_active_session ? tr("请先停止 UDP 监听再删除所有会话") : QString());
+}
+
+void HistoryQueryWidget::updatePlaybackActions() {
+    const bool has_frames = available_ && last_result_.has_value() && !last_result_->frames.isEmpty();
+    query_button_->setEnabled(available_ && !replay_mode_);
+    enter_replay_button_->setEnabled(has_frames && !replay_mode_);
+    return_live_button_->setEnabled(replay_mode_);
+    play_button_->setEnabled(replay_mode_ && !playing_ && playback_frame_index_ >= 0 &&
+                             playback_frame_index_ < playback_frame_count_ - 1);
+    pause_button_->setEnabled(replay_mode_ && playing_);
+    previous_frame_button_->setEnabled(replay_mode_ && playback_frame_index_ > 0);
+    next_frame_button_->setEnabled(replay_mode_ && playback_frame_index_ >= 0 &&
+                                    playback_frame_index_ < playback_frame_count_ - 1);
+    playback_timeline_slider_->setEnabled(replay_mode_ && playback_frame_count_ > 1);
+    playback_rate_combo_box_->setEnabled(replay_mode_);
+}
+
+void HistoryQueryWidget::handleTimelineReleased() {
+    if (!replay_mode_ || !last_result_.has_value() || last_result_->frames.isEmpty()) {
+        return;
+    }
+
+    const QDateTime start_time = last_result_->frames.constFirst().frame_time;
+    const QDateTime end_time = last_result_->frames.constLast().frame_time;
+    const qint64 duration_ms = start_time.msecsTo(end_time);
+    const qint64 selected_offset_ms =
+        duration_ms * playback_timeline_slider_->value() / playback_timeline_slider_->maximum();
+    emit seekRequested(start_time.addMSecs(selected_offset_ms));
 }
 
 } // namespace utms

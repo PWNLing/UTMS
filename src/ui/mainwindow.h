@@ -1,7 +1,11 @@
 #pragma once
 
+#include <optional>
+
 #include <QMainWindow>
 #include <QVector>
+
+#include "core/RadarTypes.h"
 
 class QCloseEvent;
 class QComboBox;
@@ -21,6 +25,7 @@ class RtspController;
 class VideoStreamWidget;
 class UdpReceiver;
 class HistoryController;
+class HistoryPlaybackController;
 class HistoryQueryWidget;
 enum class UdpStatus;
 struct HistoryConfiguration;
@@ -28,7 +33,6 @@ struct HistoryExportRequest;
 struct HistoryQuery;
 struct HistoryQueryResult;
 struct HistorySession;
-struct RadarFrame;
 } // namespace utms
 
 class MainWindow : public QMainWindow {
@@ -68,15 +72,22 @@ private slots:
     void handleHistoryQueryCompleted(const utms::HistoryQueryResult &result);
     void handleHistoryExportCompleted(const QString &output_path, int record_count);
     void handleHistoryDatabaseSizeChanged(qint64 size_bytes);
+    void handleReplayModeChanged(bool replay_mode);
+    void handlePlaybackStateChanged(bool playing);
+    void handlePlaybackFrameChanged(const utms::RadarFrame &frame, int frame_index, int frame_count,
+                                    const QDateTime &frame_time);
     void updateCurrentFrame(const utms::RadarFrame &frame);
 
 private:
     void setupUi();
+    void setupPlaybackController();
     void setupHistoryController();
     void setupUdpWorker();
     void setupVideoController();
     void requestHistoryShutdown();
     void updateHistoryStatusLabel(const QString &detail, const QString &color);
+    void updateNonMapDisplays(const utms::RadarFrame &frame);
+    void selectReplayTrack(qint64 track_id);
     void completeShutdownIfReady();
 
     QSpinBox *port_spin_box_ = nullptr;
@@ -103,7 +114,10 @@ private:
     utms::UdpReceiver *udp_receiver_ = nullptr;
     QThread *history_thread_ = nullptr;
     utms::HistoryController *history_controller_ = nullptr;
+    utms::HistoryPlaybackController *playback_controller_ = nullptr;
+    std::optional<utms::RadarFrame> latest_live_frame_;
     bool udp_listening_ = false;
+    bool replay_mode_ = false;
     bool shutdown_started_ = false;
     bool udp_shutdown_complete_ = false;
     bool history_shutdown_requested_ = false;

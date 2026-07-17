@@ -2,6 +2,7 @@
 
 #include <QWidget>
 
+#include "history/HistoryTypes.h"
 #include "map/OnlineMapState.h"
 #include "map/RealtimeTrajectoryModel.h"
 
@@ -29,6 +30,10 @@ public:
     explicit MapPanel(QWidget *parent = nullptr);
 
     void setFrame(const RadarFrame &frame);
+    void setReplayMode(bool replay_mode);
+    void setReplayFrame(const RadarFrame &frame);
+    void setReplayTrajectory(const HistoryReplayTrajectory &trajectory);
+    void clearReplayTrajectory();
     void setMapMode(MapMode mode);
     void setOnlineLayer(OnlineMapLayer layer);
     void setCenter(const GeoPosition &center);
@@ -43,6 +48,9 @@ public:
     GeoPosition center() const;
     int zoom() const;
     std::optional<qint64> selectedTrackId() const;
+    const RadarFrame &displayedFrame() const;
+    bool isReplayMode() const;
+    std::optional<HistoryReplayTrajectory> replayTrajectory() const;
     QVector<RealtimeTrajectory> realtimeTrajectories(const QDateTime &now) const;
 
 signals:
@@ -54,7 +62,9 @@ private:
     void handleOfflineViewChanged(const GeoPosition &center, int zoom);
     void applySelectionToActiveMap(std::optional<qint64> track_id);
     void applyViewToActiveMap();
+    void renderDisplayFrame(const RadarFrame &frame);
     void renderTrajectories(const QDateTime &now);
+    QVector<RealtimeTrajectory> replayTrajectories() const;
     void synchronizeActiveMap();
 
     OnlineMapState state_;
@@ -64,6 +74,9 @@ private:
     OnlineMapWidget *online_map_ = nullptr;
     OfflineMapWidget *offline_map_ = nullptr;
     MapMode map_mode_ = MapMode::kOnline;
+    std::optional<RadarFrame> latest_live_frame_;
+    std::optional<HistoryReplayTrajectory> replay_trajectory_;
+    bool replay_mode_ = false;
 };
 
 } // namespace utms

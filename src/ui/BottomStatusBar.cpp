@@ -32,8 +32,11 @@ BottomStatusBar::BottomStatusBar(QWidget *parent) : QWidget(parent)
     }
 
     layout->addStretch();
+    display_mode_label_ = new QLabel(this);
     udp_status_label_ = new QLabel(this);
     frame_rate_label_ = new QLabel(this);
+    layout->addWidget(display_mode_label_);
+    layout->addWidget(new QLabel(QStringLiteral("|"), this));
     layout->addWidget(udp_status_label_);
     layout->addWidget(new QLabel(QStringLiteral("|"), this));
     layout->addWidget(frame_rate_label_);
@@ -43,6 +46,7 @@ BottomStatusBar::BottomStatusBar(QWidget *parent) : QWidget(parent)
     connect(frame_rate_timer_, &QTimer::timeout, this, [this]() { updateSimulatedFrameRate(); });
     frame_rate_timer_->start();
     updateStatistics(TargetStatistics{});
+    setReplayState(false, false);
     setUdpStatus(UdpStatus::kStopped);
     updateSimulatedFrameRate();
 }
@@ -55,6 +59,19 @@ void BottomStatusBar::updateStatistics(const TargetStatistics &statistics)
                                           .arg(targetTypeDisplayName(kTargetTypes[index]), color_display_names[index])
                                           .arg(statistics.count(kTargetTypes[index])));
     }
+}
+
+void BottomStatusBar::setReplayState(bool replay_mode, bool playing)
+{
+    if (!replay_mode)
+    {
+        display_mode_label_->setText(tr("实时模式"));
+        display_mode_label_->setStyleSheet(QStringLiteral("QLabel { color: #208a4b; font-weight: 700; }"));
+        return;
+    }
+
+    display_mode_label_->setText(playing ? tr("历史回放 · 播放") : tr("历史回放 · 暂停"));
+    display_mode_label_->setStyleSheet(QStringLiteral("QLabel { color: #d35400; font-weight: 700; }"));
 }
 
 void BottomStatusBar::setUdpStatus(UdpStatus status)

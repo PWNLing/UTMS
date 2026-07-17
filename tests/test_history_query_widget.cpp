@@ -2,9 +2,11 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QSlider>
 #include <QTimer>
 
 #include "ui/HistoryQueryWidget.h"
@@ -15,6 +17,7 @@ class HistoryQueryWidgetTest : public QObject {
 private slots:
     void deleteAllSessionsRequiresConfirmation();
     void deleteAllSessionsIsDisabledWhileRecording();
+    void queriedFramesEnableTheRequiredPlaybackControls();
 };
 
 void HistoryQueryWidgetTest::deleteAllSessionsRequiresConfirmation() {
@@ -66,6 +69,57 @@ void HistoryQueryWidgetTest::deleteAllSessionsIsDisabledWhileRecording() {
     QVERIFY(delete_all_button != nullptr);
     QVERIFY(!delete_all_button->isEnabled());
     QVERIFY(delete_all_button->toolTip().contains(tr("停止 UDP 监听")));
+}
+
+void HistoryQueryWidgetTest::queriedFramesEnableTheRequiredPlaybackControls() {
+    utms::HistoryQueryResult result;
+    utms::HistoryFrameRecord first_frame;
+    first_frame.frame_time = QDateTime::fromMSecsSinceEpoch(1'000, QTimeZone::UTC);
+    first_frame.received_at = first_frame.frame_time;
+    utms::HistoryFrameRecord second_frame = first_frame;
+    second_frame.frame_time = QDateTime::fromMSecsSinceEpoch(2'000, QTimeZone::UTC);
+    second_frame.received_at = second_frame.frame_time;
+    result.frames = {first_frame, second_frame};
+
+    utms::HistoryQueryWidget widget;
+    widget.setAvailable(true);
+    widget.applyQueryResult(result);
+
+    auto *enter_replay_button = widget.findChild<QPushButton *>(QStringLiteral("enterReplayButton"));
+    auto *return_live_button = widget.findChild<QPushButton *>(QStringLiteral("returnLiveButton"));
+    auto *play_button = widget.findChild<QPushButton *>(QStringLiteral("playButton"));
+    auto *pause_button = widget.findChild<QPushButton *>(QStringLiteral("pauseButton"));
+    auto *previous_button = widget.findChild<QPushButton *>(QStringLiteral("previousFrameButton"));
+    auto *next_button = widget.findChild<QPushButton *>(QStringLiteral("nextFrameButton"));
+    auto *timeline_slider = widget.findChild<QSlider *>(QStringLiteral("playbackTimelineSlider"));
+    auto *rate_combo_box = widget.findChild<QComboBox *>(QStringLiteral("playbackRateComboBox"));
+    QVERIFY(enter_replay_button != nullptr);
+    QVERIFY(return_live_button != nullptr);
+    QVERIFY(play_button != nullptr);
+    QVERIFY(pause_button != nullptr);
+    QVERIFY(previous_button != nullptr);
+    QVERIFY(next_button != nullptr);
+    QVERIFY(timeline_slider != nullptr);
+    QVERIFY(rate_combo_box != nullptr);
+    QVERIFY(enter_replay_button->isEnabled());
+
+    QSignalSpy replay_spy(&widget, &utms::HistoryQueryWidget::replayRequested);
+    enter_replay_button->click();
+    QCOMPARE(replay_spy.count(), 1);
+
+    widget.setReplayMode(true);
+    widget.setPlaying(false);
+    widget.setPlaybackPosition(0, 2, first_frame.frame_time);
+    QVERIFY(!enter_replay_button->isEnabled());
+    QVERIFY(return_live_button->isEnabled());
+    QVERIFY(play_button->isEnabled());
+    QVERIFY(!pause_button->isEnabled());
+    QVERIFY(!previous_button->isEnabled());
+    QVERIFY(next_button->isEnabled());
+    QVERIFY(timeline_slider->isEnabled());
+    QCOMPARE(rate_combo_box->count(), 4);
+    QCOMPARE(rate_combo_box->itemData(0).toDouble(), 0.5);
+    QCOMPARE(rate_combo_box->itemData(3).toDouble(), 4.0);
 }
 
 QTEST_MAIN(HistoryQueryWidgetTest)

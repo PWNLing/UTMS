@@ -5,6 +5,8 @@ add_library(${PROJECT_HISTORY_TARGET} STATIC
     HistoryController.h
     HistoryCsvExporter.cpp
     HistoryCsvExporter.h
+    HistoryPlaybackController.cpp
+    HistoryPlaybackController.h
     HistorySamplingPolicy.cpp
     HistorySamplingPolicy.h
     HistoryStore.cpp
