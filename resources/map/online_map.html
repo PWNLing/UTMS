@@ -12,6 +12,8 @@
         .point { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,.9);
                  box-shadow: 0 1px 3px rgba(0,0,0,.45); box-sizing: border-box; }
         .point.selected { width: 14px; height: 14px; border: 3px solid #f1c40f; }
+        .point.alert-highlight { width: 18px; height: 18px; border: 4px solid #cf1322;
+                                 box-shadow: 0 0 0 4px rgba(207,19,34,.25); }
     </style>
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 </head>
@@ -39,6 +41,7 @@
     let lastWarningAt = 0;
     let pageReadyReported = false;
     let selectedTrackId = null;
+    let alertTrackIds = new Set();
 
     const showError = (message) => {
         clearTimeout(loadTimeout);
@@ -68,8 +71,12 @@
     };
 
     const position = value => [value.longitude, value.latitude];
-    const markerContent = (color, selected = false) =>
-        `<div class="point${selected ? ' selected' : ''}" style="background:${color}"></div>`;
+    const markerContent = (color, selected = false, alertHighlighted = false) =>
+        `<div class="point${selected ? ' selected' : ''}${alertHighlighted ? ' alert-highlight' : ''}"
+              style="background:${color}"></div>`;
+    const renderMarkerContent = (entry, trackId) =>
+        entry.marker.setContent(markerContent(entry.target.color, String(trackId) === selectedTrackId,
+            alertTrackIds.has(String(trackId))));
     const measurement = value => value === null ? '--' : Number(value).toFixed(2);
     const tooltip = target => `航迹 ID: ${target.trackId}<br>类别: ${target.type}<br>`
         + `经度: ${target.longitude.toFixed(7)}<br>纬度: ${target.latitude.toFixed(7)}<br>`
@@ -80,7 +87,8 @@
         let entry = targetMarkers.get(String(target.trackId));
         if (!entry) {
             const marker = new AMap.Marker({anchor: 'center',
-                content: markerContent(target.color, String(target.trackId) === selectedTrackId),
+                content: markerContent(target.color, String(target.trackId) === selectedTrackId,
+                    alertTrackIds.has(String(target.trackId))),
                 position: position(target), zIndex: 120, extData: target.trackId});
             marker.on('click', () => bridge.reportTargetClicked(String(marker.getExtData())));
             const info = new AMap.InfoWindow({offset: new AMap.Pixel(0, -8)});
@@ -95,7 +103,7 @@
         entry.target = target;
         entry.marker.setPosition(position(target));
         if (target.contentChanged && colorChanged) {
-            entry.marker.setContent(markerContent(target.color, String(target.trackId) === selectedTrackId));
+            renderMarkerContent(entry, target.trackId);
         }
     };
 
@@ -104,7 +112,16 @@
         selectedTrackId = trackId || null;
         [previous, selectedTrackId].forEach(id => {
             const entry = id === null ? null : targetMarkers.get(String(id));
-            if (entry) entry.marker.setContent(markerContent(entry.target.color, String(id) === selectedTrackId));
+            if (entry) renderMarkerContent(entry, id);
+        });
+    };
+
+    const setAlertHighlights = trackIds => {
+        const previous = alertTrackIds;
+        alertTrackIds = new Set((trackIds || []).map(String));
+        new Set([...previous, ...alertTrackIds]).forEach(id => {
+            const entry = targetMarkers.get(String(id));
+            if (entry) renderMarkerContent(entry, id);
         });
     };
 
@@ -257,6 +274,7 @@
         if (state.radar) updateRadar(state.radar);
         state.targets.forEach(upsertTarget);
         setSelection(state.selectedTrackId || null);
+        setAlertHighlights(state.alertTrackIds || []);
         replaceTrajectories(state.trajectories || []);
         replaceGeofences(state.geofences || []);
     };
@@ -280,6 +298,7 @@
             map.setZoomAndCenter(zoom, [longitude, latitude], true));
         bridge.layerUpdated.connect(setLayer);
         bridge.selectionUpdated.connect(setSelection);
+        bridge.alertHighlightUpdated.connect(setAlertHighlights);
         bridge.trajectoriesUpdated.connect(replaceTrajectories);
         bridge.geofencesUpdated.connect(replaceGeofences);
         bridge.geofenceEditingUpdated.connect(setEditableGeofence);

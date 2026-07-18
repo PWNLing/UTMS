@@ -15,11 +15,12 @@ class MapInteractionTest : public QObject
 {
     Q_OBJECT
 
-    private slots:
+  private slots:
     void liveFrameDoesNotCancelUserDrag();
     void trajectoryStateSurvivesMapModeSwitch();
     void replayStateSurvivesMapSwitchAndIsNotOverwrittenByLiveFrames();
     void geofenceStateAndLocationSurviveMapModeSwitch();
+    void alertHighlightIsTransientAndDoesNotChangeSelection();
     void offlineGeofenceCanBeDraggedAndEmitsUpdatedGeometry();
     void offlineRectangleAndPolygonHandlesCanBeDragged();
     void stalePersistenceEchoDoesNotOverwriteActiveGeofenceEdit();
@@ -174,6 +175,28 @@ void MapInteractionTest::geofenceStateAndLocationSurviveMapModeSwitch()
     QVERIFY(!panel.locateGeofence(999));
 }
 
+void MapInteractionTest::alertHighlightIsTransientAndDoesNotChangeSelection()
+{
+    utms::RadarFrame frame;
+    frame.received_at = QDateTime::currentDateTime();
+    frame.tracks = {{42, utms::TargetType::kCar, {25.31, 110.41}}, {99, utms::TargetType::kTruck, {25.32, 110.42}}};
+
+    utms::MapPanel panel;
+    panel.setFrame(frame);
+    QVERIFY(panel.selectTarget(99, false));
+    QVERIFY(panel.flashAlertTarget(42, 50));
+    QCOMPARE(panel.alertTrackIds(), QSet<qint64>({42}));
+    QCOMPARE(panel.selectedTrackId(), std::optional<qint64>(99));
+    QVERIFY(panel.flashAlertTargets({42, 99}, 50));
+    QCOMPARE(panel.alertTrackIds(), QSet<qint64>({42, 99}));
+
+    panel.setMapMode(utms::MapMode::kOffline);
+    QCOMPARE(panel.alertTrackIds(), QSet<qint64>({42, 99}));
+    QTRY_VERIFY(panel.alertTrackIds().isEmpty());
+    QCOMPARE(panel.selectedTrackId(), std::optional<qint64>(99));
+    QVERIFY(!panel.flashAlertTarget(1234, 50));
+}
+
 void MapInteractionTest::offlineGeofenceCanBeDraggedAndEmitsUpdatedGeometry()
 {
     utms::OfflineMapWidget widget;
@@ -190,7 +213,8 @@ void MapInteractionTest::offlineGeofenceCanBeDraggedAndEmitsUpdatedGeometry()
     QCoreApplication::processEvents();
 
     QSignalSpy edit_spy(&widget, &utms::OfflineMapWidget::geofenceEdited);
-    // Start inside the circle but away from its center/radius handles to exercise whole-shape movement.
+    // Start inside the circle but away from its center/radius handles to exercise
+    // whole-shape movement.
     const QPoint start = widget.viewport()->rect().center() + QPoint(0, 30);
     const QPoint destination = start + QPoint(45, 25);
     QTest::mousePress(widget.viewport(), Qt::LeftButton, Qt::NoModifier, start);
@@ -222,8 +246,7 @@ void MapInteractionTest::offlineRectangleAndPolygonHandlesCanBeDragged()
         QCoreApplication::processEvents();
 
         QSignalSpy edit_spy(&widget, &utms::OfflineMapWidget::geofenceEdited);
-        const QPoint start =
-            widget.mapFromScene(utms::WebMercator::geoToGlobalPixel({25.3107, 110.4158}, 17));
+        const QPoint start = widget.mapFromScene(utms::WebMercator::geoToGlobalPixel({25.3107, 110.4158}, 17));
         const QPoint destination = start + QPoint(-18, 16);
         QTest::mousePress(widget.viewport(), Qt::LeftButton, Qt::NoModifier, start);
         QTest::mouseMove(widget.viewport(), destination, 50);
@@ -247,15 +270,13 @@ void MapInteractionTest::offlineRectangleAndPolygonHandlesCanBeDragged()
         utms::Geofence polygon;
         polygon.id = 22;
         polygon.name = QStringLiteral("可编辑多边形");
-        polygon.geometry =
-            utms::PolygonGeofence{{{25.3107, 110.4158}, {25.3127, 110.4168}, {25.3107, 110.4178}}};
+        polygon.geometry = utms::PolygonGeofence{{{25.3107, 110.4158}, {25.3127, 110.4168}, {25.3107, 110.4178}}};
         widget.setGeofences({polygon});
         widget.setEditableGeofenceId(polygon.id);
         QCoreApplication::processEvents();
 
         QSignalSpy edit_spy(&widget, &utms::OfflineMapWidget::geofenceEdited);
-        const QPoint start =
-            widget.mapFromScene(utms::WebMercator::geoToGlobalPixel({25.3107, 110.4158}, 17));
+        const QPoint start = widget.mapFromScene(utms::WebMercator::geoToGlobalPixel({25.3107, 110.4158}, 17));
         const QPoint destination = start + QPoint(-16, 12);
         QTest::mousePress(widget.viewport(), Qt::LeftButton, Qt::NoModifier, start);
         QTest::mouseMove(widget.viewport(), destination, 50);

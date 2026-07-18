@@ -1,5 +1,7 @@
 #include "ui/OnlineMapWidget.h"
 
+#include <utility>
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QJsonArray>
@@ -69,8 +71,7 @@ QJsonObject trajectoryObject(const RealtimeTrajectory &trajectory)
         {
             points.append(positionObject(point));
         }
-        segments.append(QJsonObject{{QStringLiteral("points"), points},
-                                    {QStringLiteral("opacity"), segment.opacity}});
+        segments.append(QJsonObject{{QStringLiteral("points"), points}, {QStringLiteral("opacity"), segment.opacity}});
     }
     return {{QStringLiteral("trackId"), QString::number(trajectory.track_id)},
             {QStringLiteral("color"), targetTypeColorName(trajectory.type)},
@@ -225,6 +226,20 @@ void OnlineMapWidget::setSelectedTrackId(std::optional<qint64> track_id)
     }
 }
 
+void OnlineMapWidget::setAlertTrackIds(const QSet<qint64> &track_ids)
+{
+    alert_track_ids_ = track_ids;
+    if (map_ready_)
+    {
+        QJsonArray track_id_array;
+        for (qint64 track_id : std::as_const(alert_track_ids_))
+        {
+            track_id_array.append(QString::number(track_id));
+        }
+        emit bridge_->alertHighlightUpdated(track_id_array);
+    }
+}
+
 void OnlineMapWidget::setTrajectories(const QVector<RealtimeTrajectory> &trajectories)
 {
     trajectories_ = trajectories;
@@ -281,9 +296,8 @@ void OnlineMapWidget::handlePageReady()
     map_ready_ = true;
     stacked_layout_->setCurrentWidget(web_view_);
     emit bridge_->initialStateAvailable(createInitialState());
-    emit bridge_->geofenceEditingUpdated(editable_geofence_id_.has_value()
-                                             ? QString::number(editable_geofence_id_.value())
-                                             : QString());
+    emit bridge_->geofenceEditingUpdated(
+        editable_geofence_id_.has_value() ? QString::number(editable_geofence_id_.value()) : QString());
 
     if (render_reload_attempts_ > 0)
     {
@@ -314,11 +328,9 @@ void OnlineMapWidget::handleGeofenceEdited(const QJsonObject &geofence_object)
 {
     bool converted = false;
     const qint64 geofence_id = geofence_object.value(QStringLiteral("id")).toString().toLongLong(&converted);
-    const auto current =
-        std::find_if(geofences_.begin(), geofences_.end(),
-                     [geofence_id](const Geofence &candidate) { return candidate.id == geofence_id; });
-    const bool expected_edit =
-        editable_geofence_id_ == geofence_id || recently_editable_geofence_id_ == geofence_id;
+    const auto current = std::find_if(geofences_.begin(), geofences_.end(),
+                                      [geofence_id](const Geofence &candidate) { return candidate.id == geofence_id; });
+    const bool expected_edit = editable_geofence_id_ == geofence_id || recently_editable_geofence_id_ == geofence_id;
     if (!converted || current == geofences_.end() || !expected_edit)
     {
         return;
@@ -439,6 +451,12 @@ QJsonObject OnlineMapWidget::createInitialState() const
     {
         state.insert(QStringLiteral("selectedTrackId"), QString::number(render_state_.selectedTrackId().value()));
     }
+    QJsonArray alert_track_ids;
+    for (qint64 track_id : alert_track_ids_)
+    {
+        alert_track_ids.append(QString::number(track_id));
+    }
+    state.insert(QStringLiteral("alertTrackIds"), alert_track_ids);
     return state;
 }
 

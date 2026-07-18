@@ -13,13 +13,13 @@ class MapWebBridge : public QObject
     Q_PROPERTY(QString apiKey READ apiKey CONSTANT)
     Q_PROPERTY(QString securityCode READ securityCode CONSTANT)
 
-    public:
+  public:
     explicit MapWebBridge(const QString &api_key, const QString &security_code, QObject *parent = nullptr);
 
     QString apiKey() const;
     QString securityCode() const;
 
-    public slots:
+  public slots:
     void reportPageReady();
     void reportMapError(const QString &message);
     void reportMapWarning(const QString &message);
@@ -27,7 +27,7 @@ class MapWebBridge : public QObject
     void reportTargetClicked(const QString &track_id);
     void reportGeofenceEdited(const QJsonObject &geofence);
 
-    signals:
+  signals:
     void pageReadyReported();
     void mapErrorReported(const QString &message);
     void mapWarningReported(const QString &message);
@@ -38,12 +38,13 @@ class MapWebBridge : public QObject
     void viewUpdated(double longitude, double latitude, int zoom);
     void layerUpdated(const QString &layer);
     void selectionUpdated(const QString &track_id);
+    void alertHighlightUpdated(const QJsonArray &track_ids);
     void trajectoriesUpdated(const QJsonArray &trajectories);
     void geofencesUpdated(const QJsonArray &geofences);
     void geofenceEditingUpdated(const QString &geofence_id);
     void geofenceEdited(const QJsonObject &geofence);
 
-    private:
+  private:
     QString api_key_;
     QString security_code_;
 };

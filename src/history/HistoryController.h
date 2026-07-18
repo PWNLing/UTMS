@@ -15,10 +15,10 @@ namespace utms {
 class HistoryController : public QObject {
     Q_OBJECT
 
-public:
+  public:
     explicit HistoryController(QObject *parent = nullptr);
 
-public slots:
+  public slots:
     void initialize(const QString &database_path);
     void startSession();
     void stopSession();
@@ -35,12 +35,18 @@ public slots:
     void setGeofenceEnabled(qint64 geofence_id, bool enabled);
     void setGeofenceVisible(qint64 geofence_id, bool visible);
     void deleteGeofence(qint64 geofence_id);
+    void refreshAlertRules();
+    void createAlertRule(const utms::AlertRule &rule);
+    void updateAlertRule(const utms::AlertRule &rule);
+    void setAlertRuleEnabled(qint64 rule_id, bool enabled);
+    void deleteAlertRule(qint64 rule_id);
+    void persistTargetAlert(const utms::TargetAlert &alert);
     void refreshHistoryInfo();
     void cleanupExpiredHistory();
     void retryPendingOperations();
     void shutdown();
 
-signals:
+  signals:
     void configurationLoaded(const utms::HistoryConfiguration &configuration);
     void availabilityChanged(bool available, const QString &detail);
     void sessionActiveChanged(bool active, const QString &detail);
@@ -51,11 +57,15 @@ signals:
     void allSessionsDeleted(int session_count);
     void geofencesLoaded(const QVector<utms::Geofence> &geofences);
     void geofenceErrorOccurred(const QString &message);
+    void alertRulesLoaded(const QVector<utms::AlertRule> &rules);
+    void alertRuleErrorOccurred(const QString &message);
+    void targetAlertPersisted(qint64 alert_id);
+    void targetAlertPersistenceFailed(const QString &message);
     void databaseSizeChanged(qint64 size_bytes);
     void errorOccurred(const QString &message);
     void stopped();
 
-private:
+  private:
     bool initializeStore();
     void retryInitializationSteps();
     void tryStartSession();

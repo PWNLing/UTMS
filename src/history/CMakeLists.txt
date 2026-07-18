@@ -23,6 +23,7 @@ target_include_directories(${PROJECT_HISTORY_TARGET}
 
 target_link_libraries(${PROJECT_HISTORY_TARGET}
     PUBLIC
+        ${PROJECT_NAMESPACE}::alert
         ${PROJECT_NAMESPACE}::core
         Qt${QT_VERSION_MAJOR}::Core
         Qt${QT_VERSION_MAJOR}::Sql

@@ -1,7 +1,9 @@
 #include "ui/mainwindow.h"
 
 #include <optional>
+#include <utility>
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -21,6 +23,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include "alert/AlertWorker.h"
 #include "core/RadarTypes.h"
 #include "history/HistoryController.h"
 #include "history/HistoryPlaybackController.h"
@@ -28,6 +31,8 @@
 #include "map/OnlineMapState.h"
 #include "media/RtspController.h"
 #include "network/UdpReceiver.h"
+#include "ui/AlertNotificationWidget.h"
+#include "ui/AlertRuleManagerWidget.h"
 #include "ui/BottomStatusBar.h"
 #include "ui/GeofenceManagerWidget.h"
 #include "ui/HistoryQueryWidget.h"
@@ -47,6 +52,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupPlaybackController();
     handleUdpStatusChanged(utms::UdpStatus::kStopped, tr("UDP 未启动"));
     setupHistoryController();
+    setupAlertWorker();
     setupUdpWorker();
     setupVideoController();
 }
@@ -62,16 +68,22 @@ MainWindow::~MainWindow() {
         history_thread_->setParent(nullptr);
         emit shutdownHistoryWorkerRequested();
     }
+    if (alert_thread_ != nullptr && alert_thread_->isRunning()) {
+        connect(alert_thread_, &QThread::finished, alert_thread_, &QObject::deleteLater);
+        alert_thread_->setParent(nullptr);
+        emit shutdownAlertWorkerRequested();
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     const bool udp_stopped = udp_shutdown_complete_ || udp_thread_ == nullptr || !udp_thread_->isRunning();
     const bool history_stopped =
         history_shutdown_complete_ || history_thread_ == nullptr || !history_thread_->isRunning();
+    const bool alert_stopped = alert_shutdown_complete_ || alert_thread_ == nullptr || !alert_thread_->isRunning();
     const bool video_stopped = video_shutdown_complete_ || rtsp_controller_ == nullptr;
     const bool monitor_stopped =
         monitor_shutdown_complete_ || system_monitor_widget_ == nullptr || system_monitor_widget_->isShutdownComplete();
-    if (udp_stopped && history_stopped && video_stopped && monitor_stopped) {
+    if (udp_stopped && history_stopped && alert_stopped && video_stopped && monitor_stopped) {
         event->accept();
         return;
     }
@@ -85,6 +97,7 @@ void MainWindow::closeEvent(QCloseEvent *event) {
         } else {
             udp_shutdown_complete_ = true;
             requestHistoryShutdown();
+            requestAlertShutdown();
         }
         if (rtsp_controller_ != nullptr) {
             rtsp_controller_->shutdown();
@@ -104,6 +117,13 @@ void MainWindow::handleUdpWorkerStopped() {
     if (shutdown_started_ && udp_thread_ != nullptr) {
         udp_thread_->quit();
         requestHistoryShutdown();
+        requestAlertShutdown();
+    }
+}
+
+void MainWindow::handleAlertWorkerStopped() {
+    if (alert_thread_ != nullptr) {
+        alert_thread_->quit();
     }
 }
 
@@ -118,8 +138,8 @@ void MainWindow::handleSystemMonitorStopped() {
 }
 
 void MainWindow::completeShutdownIfReady() {
-    if (shutdown_started_ && udp_shutdown_complete_ && history_shutdown_complete_ && video_shutdown_complete_ &&
-        monitor_shutdown_complete_) {
+    if (shutdown_started_ && udp_shutdown_complete_ && history_shutdown_complete_ && alert_shutdown_complete_ &&
+        video_shutdown_complete_ && monitor_shutdown_complete_) {
         close();
     }
 }
@@ -127,8 +147,10 @@ void MainWindow::completeShutdownIfReady() {
 void MainWindow::handleUdpStatusChanged(utms::UdpStatus status, const QString &detail) {
     const bool listening = status != utms::UdpStatus::kStopped;
     if (!udp_listening_ && listening) {
+        emit clearAlertStateRequested();
         emit startHistorySessionRequested();
     } else if (udp_listening_ && !listening) {
+        emit clearAlertStateRequested();
         emit stopHistorySessionRequested();
     }
     udp_listening_ = listening;
@@ -170,8 +192,10 @@ void MainWindow::handleHistoryAvailabilityChanged(bool available, const QString 
     history_query_widget_->setAvailable(available);
     history_query_widget_->showStatus(detail, !available);
     geofence_manager_widget_->setAvailable(available);
+    alert_rule_manager_widget_->setAvailable(available);
     if (!available) {
         geofence_manager_widget_->showStatus(detail, true);
+        alert_rule_manager_widget_->showStatus(detail, true);
     }
 }
 
@@ -205,12 +229,61 @@ void MainWindow::handleHistoryDatabaseSizeChanged(qint64 size_bytes) {
 void MainWindow::handleGeofencesLoaded(const QVector<utms::Geofence> &geofences) {
     map_panel_->setGeofences(geofences);
     geofence_manager_widget_->setGeofences(map_panel_->geofences());
+    alert_rule_manager_widget_->setGeofences(map_panel_->geofences());
 }
 
 void MainWindow::handleGeofenceError(const QString &message) {
     map_panel_->discardPendingGeofenceEdits();
     geofence_manager_widget_->setGeofences(map_panel_->geofences());
     geofence_manager_widget_->showStatus(tr("电子围栏错误：%1").arg(message), true);
+}
+
+void MainWindow::handleAlertRulesLoaded(const QVector<utms::AlertRule> &rules) {
+    alert_rule_manager_widget_->setRules(rules);
+}
+
+void MainWindow::handleAlertRuleError(const QString &message) {
+    alert_rule_manager_widget_->showStatus(tr("告警规则错误：%1").arg(message), true);
+}
+
+void MainWindow::handleTargetAlert(const utms::TargetAlert &alert) {
+    if (alert.severity != utms::AlertSeverity::kSevere) {
+        return;
+    }
+
+    QApplication::beep();
+    if (!replay_mode_) {
+        map_panel_->flashAlertTarget(alert.track_id);
+    }
+    ++active_severe_alert_count_;
+    active_severe_alerts_.append(alert);
+    constexpr qsizetype kMaximumVisibleAlertDetails = 6;
+    if (active_severe_alerts_.size() > kMaximumVisibleAlertDetails) {
+        active_severe_alerts_.removeFirst();
+    }
+    updateSevereAlertNotification();
+}
+
+void MainWindow::updateSevereAlertNotification() {
+    if (active_severe_alerts_.isEmpty()) {
+        return;
+    }
+
+    QStringList detail_lines;
+    if (active_severe_alert_count_ > active_severe_alerts_.size()) {
+        detail_lines.append(tr("另有 %1 条严重告警").arg(active_severe_alert_count_ - active_severe_alerts_.size()));
+    }
+    for (const utms::TargetAlert &alert : std::as_const(active_severe_alerts_)) {
+        detail_lines.append(tr("%1 · 航迹 %2 · %3 · %4")
+                                .arg(alert.description)
+                                .arg(alert.track_id)
+                                .arg(utms::targetTypeDisplayName(alert.target_type),
+                                     alert.occurred_at.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))));
+    }
+    const QString title = active_severe_alert_count_ == 1
+                              ? tr("严重告警 · %1").arg(active_severe_alerts_.constFirst().rule_name)
+                              : tr("严重告警 · %1 条").arg(active_severe_alert_count_);
+    alert_notification_widget_->showNotification(title, detail_lines.join(QLatin1Char('\n')));
 }
 
 void MainWindow::handleReplayModeChanged(bool replay_mode) {
@@ -430,6 +503,17 @@ void MainWindow::setupUi() {
         geofence_manager_widget_->showStatus(tr("地图编辑无效：%1，已恢复原围栏").arg(message), true);
     });
 
+    alert_rule_manager_widget_ = new utms::AlertRuleManagerWidget(configuration_tabs);
+    configuration_tabs->addTab(alert_rule_manager_widget_, tr("告警规则"));
+    connect(alert_rule_manager_widget_, &utms::AlertRuleManagerWidget::createRequested, this,
+            &MainWindow::createAlertRuleRequested);
+    connect(alert_rule_manager_widget_, &utms::AlertRuleManagerWidget::updateRequested, this,
+            &MainWindow::updateAlertRuleRequested);
+    connect(alert_rule_manager_widget_, &utms::AlertRuleManagerWidget::enabledChangeRequested, this,
+            &MainWindow::setAlertRuleEnabledRequested);
+    connect(alert_rule_manager_widget_, &utms::AlertRuleManagerWidget::deleteRequested, this,
+            &MainWindow::deleteAlertRuleRequested);
+
     data_splitter->addWidget(track_table_);
     data_splitter->addWidget(configuration_tabs);
     data_splitter->setStretchFactor(0, 55);
@@ -442,6 +526,12 @@ void MainWindow::setupUi() {
     content_splitter->setStretchFactor(1, 35);
     content_splitter->setSizes({910, 490});
     main_layout->addWidget(content_splitter, 1);
+    alert_notification_widget_ = new utms::AlertNotificationWidget(central_widget);
+    main_layout->addWidget(alert_notification_widget_, 0, Qt::AlignRight);
+    connect(alert_notification_widget_, &utms::AlertNotificationWidget::notificationFinished, this, [this]() {
+        active_severe_alerts_.clear();
+        active_severe_alert_count_ = 0;
+    });
     bottom_status_bar_ = new utms::BottomStatusBar(central_widget);
     main_layout->addWidget(bottom_status_bar_);
     setCentralWidget(central_widget);
@@ -584,6 +674,14 @@ void MainWindow::setupHistoryController() {
     connect(this, &MainWindow::setGeofenceVisibleRequested, history_controller_,
             &utms::HistoryController::setGeofenceVisible);
     connect(this, &MainWindow::deleteGeofenceRequested, history_controller_, &utms::HistoryController::deleteGeofence);
+    connect(this, &MainWindow::createAlertRuleRequested, history_controller_,
+            &utms::HistoryController::createAlertRule);
+    connect(this, &MainWindow::updateAlertRuleRequested, history_controller_,
+            &utms::HistoryController::updateAlertRule);
+    connect(this, &MainWindow::setAlertRuleEnabledRequested, history_controller_,
+            &utms::HistoryController::setAlertRuleEnabled);
+    connect(this, &MainWindow::deleteAlertRuleRequested, history_controller_,
+            &utms::HistoryController::deleteAlertRule);
     connect(this, &MainWindow::shutdownHistoryWorkerRequested, history_controller_, &utms::HistoryController::shutdown);
     connect(history_controller_, &utms::HistoryController::configurationLoaded, this,
             &MainWindow::handleHistoryConfigurationLoaded);
@@ -602,6 +700,14 @@ void MainWindow::setupHistoryController() {
     connect(history_controller_, &utms::HistoryController::geofencesLoaded, this, &MainWindow::handleGeofencesLoaded);
     connect(history_controller_, &utms::HistoryController::geofenceErrorOccurred, this,
             &MainWindow::handleGeofenceError);
+    connect(history_controller_, &utms::HistoryController::alertRulesLoaded, this, &MainWindow::handleAlertRulesLoaded);
+    connect(history_controller_, &utms::HistoryController::alertRuleErrorOccurred, this,
+            &MainWindow::handleAlertRuleError);
+    connect(history_controller_, &utms::HistoryController::targetAlertPersistenceFailed, this,
+            [this](const QString &message) {
+                qWarning() << "MainWindow: target alert persistence failed" << message;
+                alert_rule_manager_widget_->showStatus(tr("告警已呈现，但保存失败：%1").arg(message), true);
+            });
     connect(history_controller_, &utms::HistoryController::sessionDeleted, this, [this](qint64 session_id) {
         history_query_widget_->showStatus(tr("历史会话 #%1 已删除").arg(session_id), false);
     });
@@ -616,6 +722,49 @@ void MainWindow::setupHistoryController() {
     });
 
     history_thread_->start();
+}
+
+void MainWindow::setupAlertWorker() {
+    alert_thread_ = new QThread(this);
+    alert_worker_ = new utms::AlertWorker();
+    if (!alert_worker_->moveToThread(alert_thread_)) {
+        delete alert_worker_;
+        alert_worker_ = nullptr;
+        alert_shutdown_complete_ = true;
+        handleAlertRuleError(tr("告警工作线程初始化失败"));
+        return;
+    }
+
+    connect(this, &MainWindow::shutdownAlertWorkerRequested, alert_worker_, &utms::AlertWorker::shutdown);
+    connect(this, &MainWindow::clearAlertStateRequested, alert_worker_, &utms::AlertWorker::clearState);
+    connect(alert_worker_, &utms::AlertWorker::alertTriggered, this, &MainWindow::handleTargetAlert);
+    connect(alert_worker_, &utms::AlertWorker::errorOccurred, this, &MainWindow::handleAlertRuleError);
+    connect(alert_worker_, &utms::AlertWorker::stopped, this, &MainWindow::handleAlertWorkerStopped);
+    if (history_controller_ != nullptr) {
+        connect(history_controller_, &utms::HistoryController::geofencesLoaded, alert_worker_,
+                &utms::AlertWorker::setGeofences);
+        connect(history_controller_, &utms::HistoryController::alertRulesLoaded, alert_worker_,
+                &utms::AlertWorker::setRules);
+        connect(alert_worker_, &utms::AlertWorker::alertTriggered, history_controller_,
+                &utms::HistoryController::persistTargetAlert);
+    }
+    connect(alert_thread_, &QThread::finished, alert_worker_, &QObject::deleteLater);
+    connect(alert_thread_, &QThread::finished, this, [this]() {
+        alert_shutdown_complete_ = true;
+        completeShutdownIfReady();
+    });
+
+    alert_thread_->start();
+    if (history_controller_ != nullptr) {
+        if (!QMetaObject::invokeMethod(history_controller_, &utms::HistoryController::refreshGeofences,
+                                       Qt::QueuedConnection)) {
+            qWarning() << "MainWindow: failed to queue the initial geofence refresh for the alert worker";
+        }
+        if (!QMetaObject::invokeMethod(history_controller_, &utms::HistoryController::refreshAlertRules,
+                                       Qt::QueuedConnection)) {
+            qWarning() << "MainWindow: failed to queue the initial alert-rule refresh";
+        }
+    }
 }
 
 void MainWindow::setupUdpWorker() {
@@ -638,6 +787,10 @@ void MainWindow::setupUdpWorker() {
         connect(udp_receiver_, &utms::UdpReceiver::frameReceived, history_controller_,
                 &utms::HistoryController::recordAcceptedFrame);
     }
+    if (alert_worker_ != nullptr) {
+        connect(udp_receiver_, &utms::UdpReceiver::frameReceived, alert_worker_,
+                &utms::AlertWorker::evaluateAcceptedFrame);
+    }
     connect(udp_receiver_, &utms::UdpReceiver::stopped, this, &MainWindow::handleUdpWorkerStopped);
     connect(udp_thread_, &QThread::finished, udp_receiver_, &QObject::deleteLater);
     connect(udp_thread_, &QThread::finished, this, [this]() {
@@ -658,6 +811,20 @@ void MainWindow::requestHistoryShutdown() {
         emit shutdownHistoryWorkerRequested();
     } else {
         history_shutdown_complete_ = true;
+        completeShutdownIfReady();
+    }
+}
+
+void MainWindow::requestAlertShutdown() {
+    if (alert_shutdown_requested_) {
+        return;
+    }
+    alert_shutdown_requested_ = true;
+
+    if (alert_thread_ != nullptr && alert_thread_->isRunning() && alert_worker_ != nullptr) {
+        emit shutdownAlertWorkerRequested();
+    } else {
+        alert_shutdown_complete_ = true;
         completeShutdownIfReady();
     }
 }

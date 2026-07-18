@@ -87,7 +87,8 @@ bool geofenceCollectionsEqual(const QVector<Geofence> &left, const QVector<Geofe
 
 MapPanel::MapPanel(QWidget *parent)
     : QWidget(parent), map_stack_(new QStackedWidget(this)), trajectory_refresh_timer_(new QTimer(this)),
-      online_map_(new OnlineMapWidget(map_stack_)), offline_map_(new OfflineMapWidget(map_stack_))
+      alert_highlight_timer_(new QTimer(this)), online_map_(new OnlineMapWidget(map_stack_)),
+      offline_map_(new OfflineMapWidget(map_stack_))
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -108,6 +109,14 @@ MapPanel::MapPanel(QWidget *parent)
     connect(trajectory_refresh_timer_, &QTimer::timeout, this,
             [this]() { renderTrajectories(QDateTime::currentDateTime()); });
     trajectory_refresh_timer_->start();
+    alert_highlight_timer_->setSingleShot(true);
+    connect(alert_highlight_timer_, &QTimer::timeout, this,
+            [this]()
+            {
+                alert_track_ids_.clear();
+                online_map_->setAlertTrackIds({});
+                offline_map_->setAlertTrackIds({});
+            });
 }
 
 void MapPanel::setFrame(const RadarFrame &frame)
@@ -251,8 +260,7 @@ void MapPanel::setGeofences(const QVector<Geofence> &geofences)
     {
         const qint64 pending_geofence_id = pending.key();
         const auto incoming =
-            std::find_if(geofences_.begin(), geofences_.end(),
-                         [pending_geofence_id](const Geofence &geofence)
+            std::find_if(geofences_.begin(), geofences_.end(), [pending_geofence_id](const Geofence &geofence)
                          { return geofence.id == pending_geofence_id; });
         if (incoming == geofences_.end())
         {
@@ -271,8 +279,7 @@ void MapPanel::setGeofences(const QVector<Geofence> &geofences)
     if (editable_geofence_id_.has_value())
     {
         const auto editable =
-            std::find_if(geofences_.cbegin(), geofences_.cend(),
-                         [this](const Geofence &geofence)
+            std::find_if(geofences_.cbegin(), geofences_.cend(), [this](const Geofence &geofence)
                          { return geofence.id == editable_geofence_id_.value() && geofence.visible; });
         if (editable == geofences_.cend())
         {
@@ -300,8 +307,7 @@ bool MapPanel::setEditableGeofenceId(std::optional<qint64> geofence_id)
     if (geofence_id.has_value())
     {
         const auto geofence =
-            std::find_if(geofences_.cbegin(), geofences_.cend(),
-                         [geofence_id](const Geofence &candidate)
+            std::find_if(geofences_.cbegin(), geofences_.cend(), [geofence_id](const Geofence &candidate)
                          { return candidate.id == geofence_id.value() && candidate.visible; });
         if (geofence == geofences_.cend())
         {
@@ -402,9 +408,8 @@ bool MapPanel::locateRadar()
 
 bool MapPanel::locateGeofence(qint64 geofence_id)
 {
-    const auto geofence =
-        std::find_if(geofences_.cbegin(), geofences_.cend(),
-                     [geofence_id](const Geofence &candidate) { return candidate.id == geofence_id; });
+    const auto geofence = std::find_if(geofences_.cbegin(), geofences_.cend(), [geofence_id](const Geofence &candidate)
+                                       { return candidate.id == geofence_id; });
     if (geofence == geofences_.cend())
     {
         return false;
@@ -414,50 +419,63 @@ bool MapPanel::locateGeofence(qint64 geofence_id)
     return true;
 }
 
-MapMode MapPanel::mapMode() const
+bool MapPanel::flashAlertTarget(qint64 track_id, int duration_ms)
 {
-    return map_mode_;
+    return flashAlertTargets({track_id}, duration_ms);
 }
 
-GeoPosition MapPanel::center() const
+bool MapPanel::flashAlertTargets(const QVector<qint64> &track_ids, int duration_ms)
 {
-    return state_.center();
+    if (duration_ms <= 0)
+    {
+        return false;
+    }
+    QSet<qint64> current_track_ids;
+    for (const TrackData &track : state_.currentFrame().tracks)
+    {
+        current_track_ids.insert(track.track_id);
+    }
+    bool target_found = false;
+    for (qint64 track_id : track_ids)
+    {
+        if (current_track_ids.contains(track_id))
+        {
+            alert_track_ids_.insert(track_id);
+            target_found = true;
+        }
+    }
+    if (!target_found)
+    {
+        return false;
+    }
+    online_map_->setAlertTrackIds(alert_track_ids_);
+    offline_map_->setAlertTrackIds(alert_track_ids_);
+    alert_highlight_timer_->start(duration_ms);
+    return true;
 }
 
-int MapPanel::zoom() const
-{
-    return state_.zoom();
-}
+MapMode MapPanel::mapMode() const { return map_mode_; }
 
-std::optional<qint64> MapPanel::selectedTrackId() const
-{
-    return state_.selectedTrackId();
-}
+GeoPosition MapPanel::center() const { return state_.center(); }
 
-const RadarFrame &MapPanel::displayedFrame() const
-{
-    return state_.currentFrame();
-}
+int MapPanel::zoom() const { return state_.zoom(); }
 
-bool MapPanel::isReplayMode() const
-{
-    return replay_mode_;
-}
+std::optional<qint64> MapPanel::selectedTrackId() const { return state_.selectedTrackId(); }
 
-std::optional<HistoryReplayTrajectory> MapPanel::replayTrajectory() const
-{
-    return replay_trajectory_;
-}
+QSet<qint64> MapPanel::alertTrackIds() const { return alert_track_ids_; }
+
+const RadarFrame &MapPanel::displayedFrame() const { return state_.currentFrame(); }
+
+bool MapPanel::isReplayMode() const { return replay_mode_; }
+
+std::optional<HistoryReplayTrajectory> MapPanel::replayTrajectory() const { return replay_trajectory_; }
 
 QVector<RealtimeTrajectory> MapPanel::realtimeTrajectories(const QDateTime &now) const
 {
     return trajectory_model_.visibleTrajectories(now);
 }
 
-const QVector<Geofence> &MapPanel::geofences() const
-{
-    return geofences_;
-}
+const QVector<Geofence> &MapPanel::geofences() const { return geofences_; }
 
 void MapPanel::handleTargetClicked(qint64 track_id)
 {
@@ -469,9 +487,8 @@ void MapPanel::handleTargetClicked(qint64 track_id)
 
 void MapPanel::handleGeofenceEdited(const Geofence &geofence)
 {
-    const auto current =
-        std::find_if(geofences_.begin(), geofences_.end(),
-                     [&geofence](const Geofence &candidate) { return candidate.id == geofence.id; });
+    const auto current = std::find_if(geofences_.begin(), geofences_.end(),
+                                      [&geofence](const Geofence &candidate) { return candidate.id == geofence.id; });
     if (current == geofences_.end())
     {
         return;
@@ -560,10 +577,12 @@ void MapPanel::synchronizeActiveMap()
         online_map_->synchronizeState(state_);
         online_map_->setLayer(state_.layer());
         online_map_->setSelectedTrackId(state_.selectedTrackId());
+        online_map_->setAlertTrackIds(alert_track_ids_);
     }
     else
     {
         offline_map_->renderState(state_);
+        offline_map_->setAlertTrackIds(alert_track_ids_);
     }
     applyViewToActiveMap();
     renderTrajectories(QDateTime::currentDateTime());

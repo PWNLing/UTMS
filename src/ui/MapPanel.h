@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QSet>
 #include <QWidget>
 
 #include "core/GeofenceTypes.h"
@@ -28,7 +29,7 @@ class MapPanel : public QWidget
 {
     Q_OBJECT
 
-public:
+  public:
     explicit MapPanel(QWidget *parent = nullptr);
 
     void setFrame(const RadarFrame &frame);
@@ -49,24 +50,27 @@ public:
     bool selectTarget(qint64 track_id, bool center_on_target);
     bool locateRadar();
     bool locateGeofence(qint64 geofence_id);
+    bool flashAlertTarget(qint64 track_id, int duration_ms = 3'000);
+    bool flashAlertTargets(const QVector<qint64> &track_ids, int duration_ms = 3'000);
 
     MapMode mapMode() const;
     GeoPosition center() const;
     int zoom() const;
     std::optional<qint64> selectedTrackId() const;
+    QSet<qint64> alertTrackIds() const;
     const RadarFrame &displayedFrame() const;
     bool isReplayMode() const;
     std::optional<HistoryReplayTrajectory> replayTrajectory() const;
     QVector<RealtimeTrajectory> realtimeTrajectories(const QDateTime &now) const;
     const QVector<Geofence> &geofences() const;
 
-signals:
+  signals:
     void targetClicked(qint64 track_id);
     void geofenceEdited(const Geofence &geofence);
     void geofenceEditingChanged(std::optional<qint64> geofence_id);
     void geofenceEditError(const QString &message);
 
-private:
+  private:
     void handleTargetClicked(qint64 track_id);
     void handleGeofenceEdited(const Geofence &geofence);
     void handleOnlineViewChanged(const GeoPosition &center, int zoom);
@@ -82,6 +86,7 @@ private:
     RealtimeTrajectoryModel trajectory_model_;
     QStackedWidget *map_stack_ = nullptr;
     QTimer *trajectory_refresh_timer_ = nullptr;
+    QTimer *alert_highlight_timer_ = nullptr;
     OnlineMapWidget *online_map_ = nullptr;
     OfflineMapWidget *offline_map_ = nullptr;
     MapMode map_mode_ = MapMode::kOnline;
@@ -91,6 +96,7 @@ private:
     QVector<Geofence> confirmed_geofences_;
     QHash<qint64, Geofence> pending_geofence_edits_;
     std::optional<qint64> editable_geofence_id_;
+    QSet<qint64> alert_track_ids_;
     bool replay_mode_ = false;
 };
 

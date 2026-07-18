@@ -28,7 +28,7 @@ class OfflineMapWidget : public QGraphicsView
 {
     Q_OBJECT
 
-    public:
+  public:
     explicit OfflineMapWidget(QWidget *parent = nullptr);
 
     void renderState(const OnlineMapState &state);
@@ -37,20 +37,21 @@ class OfflineMapWidget : public QGraphicsView
     void setEditableGeofenceId(std::optional<qint64> geofence_id);
     void setView(const GeoPosition &center, int zoom);
     void setSelectedTrackId(std::optional<qint64> track_id);
+    void setAlertTrackIds(const QSet<qint64> &track_ids);
 
-    signals:
+  signals:
     void targetClicked(qint64 track_id);
     void geofenceEdited(const Geofence &geofence);
     void geofenceEditError(const QString &message);
     void viewChanged(const GeoPosition &center, int zoom);
 
-    protected:
+  protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
 
-    private:
+  private:
     void updateMarkers();
     void updateTrajectoryItems();
     void updateGeofenceItems();
@@ -87,6 +88,7 @@ class OfflineMapWidget : public QGraphicsView
     int pending_missing_tile_count_ = 0;
     bool applying_view_ = false;
     std::optional<qint64> editable_geofence_id_;
+    QSet<qint64> alert_track_ids_;
     QGraphicsItem *active_geofence_edit_item_ = nullptr;
 };
 

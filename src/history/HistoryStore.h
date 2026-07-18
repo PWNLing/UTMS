@@ -3,13 +3,14 @@
 #include <QString>
 #include <QVector>
 
+#include "alert/AlertTypes.h"
 #include "core/GeofenceTypes.h"
 #include "history/HistoryTypes.h"
 
 namespace utms {
 
 class HistoryStore {
-public:
+  public:
     explicit HistoryStore(const QString &database_path);
     ~HistoryStore();
 
@@ -38,10 +39,17 @@ public:
     bool setGeofenceEnabled(qint64 geofence_id, bool enabled, QString *error_message = nullptr);
     bool setGeofenceVisible(qint64 geofence_id, bool visible, QString *error_message = nullptr);
     bool deleteGeofence(qint64 geofence_id, QString *error_message = nullptr);
+    std::optional<QVector<AlertRule>> loadAlertRules(QString *error_message = nullptr) const;
+    std::optional<qint64> createAlertRule(const AlertRule &rule, QString *error_message = nullptr);
+    bool updateAlertRule(const AlertRule &rule, QString *error_message = nullptr);
+    bool setAlertRuleEnabled(qint64 rule_id, bool enabled, QString *error_message = nullptr);
+    bool deleteAlertRule(qint64 rule_id, QString *error_message = nullptr);
+    std::optional<qint64> appendTargetAlert(const TargetAlert &alert, QString *error_message = nullptr);
+    std::optional<TargetAlert> loadTargetAlert(qint64 alert_id, QString *error_message = nullptr) const;
     bool probeWriteAccess(QString *error_message = nullptr);
     qint64 databaseSizeBytes() const;
 
-private:
+  private:
     void close();
 
     QString database_path_;

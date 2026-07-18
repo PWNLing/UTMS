@@ -23,8 +23,11 @@ HistoryController::HistoryController(QObject *parent)
     qRegisterMetaType<HistoryQueryResult>();
     qRegisterMetaType<HistoryExportRequest>();
     qRegisterMetaType<Geofence>();
+    qRegisterMetaType<AlertRule>();
+    qRegisterMetaType<TargetAlert>();
     qRegisterMetaType<QVector<HistorySession>>();
     qRegisterMetaType<QVector<Geofence>>();
+    qRegisterMetaType<QVector<AlertRule>>();
     retry_timer_->setInterval(kDatabaseRetryIntervalMs);
     connect(retry_timer_, &QTimer::timeout, this, &HistoryController::retryPendingOperations);
     maintenance_timer_->setInterval(kMaintenanceIntervalMs);
@@ -293,6 +296,106 @@ void HistoryController::deleteGeofence(qint64 geofence_id) {
     }
     qInfo() << "HistoryController: deleted geofence" << geofence_id;
     refreshGeofences();
+    refreshAlertRules();
+}
+
+void HistoryController::refreshAlertRules() {
+    if (shutting_down_ || store_ == nullptr) {
+        return;
+    }
+
+    QString error;
+    const std::optional<QVector<AlertRule>> rules = store_->loadAlertRules(&error);
+    if (!rules.has_value()) {
+        qWarning() << "HistoryController: failed to load alert rules" << error;
+        emit alertRuleErrorOccurred(error);
+        return;
+    }
+    emit alertRulesLoaded(rules.value());
+}
+
+void HistoryController::createAlertRule(const AlertRule &rule) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit alertRuleErrorOccurred(tr("历史数据库不可用，无法创建告警规则"));
+        return;
+    }
+
+    QString error;
+    const std::optional<qint64> rule_id = store_->createAlertRule(rule, &error);
+    if (!rule_id.has_value()) {
+        qWarning() << "HistoryController: failed to create alert rule" << error;
+        emit alertRuleErrorOccurred(error);
+        return;
+    }
+    qInfo() << "HistoryController: created alert rule" << rule_id.value() << rule.name;
+    refreshAlertRules();
+}
+
+void HistoryController::updateAlertRule(const AlertRule &rule) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit alertRuleErrorOccurred(tr("历史数据库不可用，无法更新告警规则"));
+        return;
+    }
+
+    QString error;
+    if (!store_->updateAlertRule(rule, &error)) {
+        qWarning() << "HistoryController: failed to update alert rule" << rule.id << error;
+        emit alertRuleErrorOccurred(error);
+        refreshAlertRules();
+        return;
+    }
+    qInfo() << "HistoryController: updated alert rule" << rule.id;
+    refreshAlertRules();
+}
+
+void HistoryController::setAlertRuleEnabled(qint64 rule_id, bool enabled) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit alertRuleErrorOccurred(tr("历史数据库不可用，无法更新告警规则启用状态"));
+        return;
+    }
+
+    QString error;
+    if (!store_->setAlertRuleEnabled(rule_id, enabled, &error)) {
+        qWarning() << "HistoryController: failed to set alert rule enabled" << rule_id << error;
+        emit alertRuleErrorOccurred(error);
+        refreshAlertRules();
+        return;
+    }
+    qInfo() << "HistoryController: set alert rule enabled" << rule_id << enabled;
+    refreshAlertRules();
+}
+
+void HistoryController::deleteAlertRule(qint64 rule_id) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit alertRuleErrorOccurred(tr("历史数据库不可用，无法删除告警规则"));
+        return;
+    }
+
+    QString error;
+    if (!store_->deleteAlertRule(rule_id, &error)) {
+        qWarning() << "HistoryController: failed to delete alert rule" << rule_id << error;
+        emit alertRuleErrorOccurred(error);
+        return;
+    }
+    qInfo() << "HistoryController: deleted alert rule" << rule_id;
+    refreshAlertRules();
+}
+
+void HistoryController::persistTargetAlert(const TargetAlert &alert) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit targetAlertPersistenceFailed(tr("历史数据库不可用，无法保存目标告警"));
+        return;
+    }
+
+    QString error;
+    const std::optional<qint64> alert_id = store_->appendTargetAlert(alert, &error);
+    if (!alert_id.has_value()) {
+        qWarning() << "HistoryController: failed to persist target alert" << alert.rule_id << alert.track_id << error;
+        emit targetAlertPersistenceFailed(error);
+        return;
+    }
+    qInfo() << "HistoryController: persisted target alert" << alert_id.value() << alert.rule_id << alert.track_id;
+    emit targetAlertPersisted(alert_id.value());
 }
 
 void HistoryController::refreshHistoryInfo() {
@@ -443,6 +546,7 @@ void HistoryController::retryInitializationSteps() {
         emit availabilityChanged(true, tr("历史数据库已就绪"));
         refreshHistoryInfo();
         refreshGeofences();
+        refreshAlertRules();
     }
 }
 

@@ -5,6 +5,7 @@
 #include <QMainWindow>
 #include <QVector>
 
+#include "alert/AlertTypes.h"
 #include "core/GeofenceTypes.h"
 #include "core/RadarTypes.h"
 
@@ -18,6 +19,9 @@ class QThread;
 
 namespace utms {
 class MapPanel;
+class AlertNotificationWidget;
+class AlertRuleManagerWidget;
+class AlertWorker;
 class BottomStatusBar;
 class StatisticsWidget;
 class SystemMonitorWidget;
@@ -40,11 +44,11 @@ struct HistorySession;
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
-public:
+  public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
-signals:
+  signals:
     void startListeningRequested(quint16 port);
     void stopListeningRequested();
     void shutdownUdpWorkerRequested();
@@ -62,12 +66,18 @@ signals:
     void setGeofenceEnabledRequested(qint64 geofence_id, bool enabled);
     void setGeofenceVisibleRequested(qint64 geofence_id, bool visible);
     void deleteGeofenceRequested(qint64 geofence_id);
+    void createAlertRuleRequested(const utms::AlertRule &rule);
+    void updateAlertRuleRequested(const utms::AlertRule &rule);
+    void setAlertRuleEnabledRequested(qint64 rule_id, bool enabled);
+    void deleteAlertRuleRequested(qint64 rule_id);
+    void clearAlertStateRequested();
     void shutdownHistoryWorkerRequested();
+    void shutdownAlertWorkerRequested();
 
-protected:
+  protected:
     void closeEvent(QCloseEvent *event) override;
 
-private slots:
+  private slots:
     void handleUdpStatusChanged(utms::UdpStatus status, const QString &detail);
     void handleUdpWorkerStopped();
     void handleVideoWorkerStopped();
@@ -82,22 +92,29 @@ private slots:
     void handleHistoryDatabaseSizeChanged(qint64 size_bytes);
     void handleGeofencesLoaded(const QVector<utms::Geofence> &geofences);
     void handleGeofenceError(const QString &message);
+    void handleAlertRulesLoaded(const QVector<utms::AlertRule> &rules);
+    void handleAlertRuleError(const QString &message);
+    void handleTargetAlert(const utms::TargetAlert &alert);
+    void handleAlertWorkerStopped();
     void handleReplayModeChanged(bool replay_mode);
     void handlePlaybackStateChanged(bool playing);
     void handlePlaybackFrameChanged(const utms::RadarFrame &frame, int frame_index, int frame_count,
                                     const QDateTime &frame_time);
     void updateCurrentFrame(const utms::RadarFrame &frame);
 
-private:
+  private:
     void setupUi();
     void setupPlaybackController();
     void setupHistoryController();
+    void setupAlertWorker();
     void setupUdpWorker();
     void setupVideoController();
     void requestHistoryShutdown();
+    void requestAlertShutdown();
     void updateHistoryStatusLabel(const QString &detail, const QString &color);
     void updateNonMapDisplays(const utms::RadarFrame &frame);
     void selectReplayTrack(qint64 track_id);
+    void updateSevereAlertNotification();
     void completeShutdownIfReady();
 
     QSpinBox *port_spin_box_ = nullptr;
@@ -109,6 +126,8 @@ private:
     QLabel *history_status_label_ = nullptr;
     utms::HistoryQueryWidget *history_query_widget_ = nullptr;
     utms::GeofenceManagerWidget *geofence_manager_widget_ = nullptr;
+    utms::AlertRuleManagerWidget *alert_rule_manager_widget_ = nullptr;
+    utms::AlertNotificationWidget *alert_notification_widget_ = nullptr;
     utms::TrackTableWidget *track_table_ = nullptr;
     utms::MapPanel *map_panel_ = nullptr;
     QComboBox *map_mode_combo_box_ = nullptr;
@@ -125,7 +144,11 @@ private:
     utms::UdpReceiver *udp_receiver_ = nullptr;
     QThread *history_thread_ = nullptr;
     utms::HistoryController *history_controller_ = nullptr;
+    QThread *alert_thread_ = nullptr;
+    utms::AlertWorker *alert_worker_ = nullptr;
     utms::HistoryPlaybackController *playback_controller_ = nullptr;
+    QVector<utms::TargetAlert> active_severe_alerts_;
+    int active_severe_alert_count_ = 0;
     std::optional<utms::RadarFrame> latest_live_frame_;
     bool udp_listening_ = false;
     bool replay_mode_ = false;
@@ -133,6 +156,8 @@ private:
     bool udp_shutdown_complete_ = false;
     bool history_shutdown_requested_ = false;
     bool history_shutdown_complete_ = false;
+    bool alert_shutdown_requested_ = false;
+    bool alert_shutdown_complete_ = false;
     bool video_shutdown_complete_ = false;
     bool monitor_shutdown_complete_ = false;
 };

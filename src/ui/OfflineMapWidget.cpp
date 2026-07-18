@@ -8,8 +8,8 @@
 #include <QDir>
 #include <QFutureWatcher>
 #include <QGraphicsEllipseItem>
-#include <QGraphicsPixmapItem>
 #include <QGraphicsPathItem>
+#include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QGraphicsSimpleTextItem>
 #include <QImage>
@@ -160,6 +160,12 @@ void OfflineMapWidget::setSelectedTrackId(std::optional<qint64> track_id)
     updateMarkers();
 }
 
+void OfflineMapWidget::setAlertTrackIds(const QSet<qint64> &track_ids)
+{
+    alert_track_ids_ = track_ids;
+    updateMarkers();
+}
+
 void OfflineMapWidget::mousePressEvent(QMouseEvent *event)
 {
     if (QGraphicsItem *clicked_item = itemAt(event->position().toPoint()); clicked_item != nullptr)
@@ -187,9 +193,8 @@ void OfflineMapWidget::mouseReleaseEvent(QMouseEvent *event)
         active_geofence_edit_item_ = nullptr;
         const qint64 geofence_id = edited_item->data(kGeofenceIdDataRole).toLongLong();
         const int handle_index = edited_item->data(kGeofenceHandleDataRole).toInt();
-        const auto current =
-            std::find_if(geofences_.begin(), geofences_.end(),
-                         [geofence_id](const Geofence &candidate) { return candidate.id == geofence_id; });
+        const auto current = std::find_if(geofences_.begin(), geofences_.end(), [geofence_id](const Geofence &candidate)
+                                          { return candidate.id == geofence_id; });
         if (current != geofences_.end())
         {
             Geofence edited = *current;
@@ -233,9 +238,8 @@ void OfflineMapWidget::mouseReleaseEvent(QMouseEvent *event)
                         const QPointF center_px = WebMercator::geoToGlobalPixel(circle->center, zoom_);
                         const double radius_px = QLineF(center_px, edited_item->scenePos()).length();
                         const double latitude_radians = circle->center.latitude * 3.14159265358979323846 / 180.0;
-                        const double meters_per_pixel =
-                            kInitialResolutionMpp * std::cos(latitude_radians) /
-                            static_cast<double>(quint64{1} << zoom_);
+                        const double meters_per_pixel = kInitialResolutionMpp * std::cos(latitude_radians) /
+                                                        static_cast<double>(quint64{1} << zoom_);
                         circle->radius_m = radius_px * meters_per_pixel;
                     }
                 }
@@ -336,7 +340,8 @@ void OfflineMapWidget::updateMarkers()
         current_track_ids.insert(target.track_id);
         const QPointF position_px = WebMercator::geoToGlobalPixel(target.position, zoom_);
         const bool selected = selected_track_id == target.track_id;
-        const qreal diameter_px = selected ? 14.0 : 10.0;
+        const bool alert_highlighted = alert_track_ids_.contains(target.track_id);
+        const qreal diameter_px = alert_highlighted ? 18.0 : (selected ? 14.0 : 10.0);
         QGraphicsEllipseItem *marker = target_items_.value(target.track_id);
         if (marker == nullptr)
         {
@@ -347,7 +352,10 @@ void OfflineMapWidget::updateMarkers()
         }
         marker->setRect(position_px.x() - diameter_px / 2.0, position_px.y() - diameter_px / 2.0, diameter_px,
                         diameter_px);
-        marker->setPen(QPen(selected ? QColor(QStringLiteral("#f1c40f")) : Qt::white, selected ? 3.0 : 1.0));
+        const QColor border_color = alert_highlighted
+                                        ? QColor(QStringLiteral("#cf1322"))
+                                        : (selected ? QColor(QStringLiteral("#f1c40f")) : QColor(Qt::white));
+        marker->setPen(QPen(border_color, alert_highlighted ? 4.0 : (selected ? 3.0 : 1.0)));
         marker->setBrush(QColor(target.color));
         marker->setToolTip(targetTooltip(target));
 
@@ -512,11 +520,9 @@ void OfflineMapWidget::updateGeofenceItems()
         {
             handle_positions = {
                 WebMercator::geoToGlobalPixel(rectangle->southwest, zoom_),
-                WebMercator::geoToGlobalPixel(
-                    {rectangle->southwest.latitude, rectangle->northeast.longitude}, zoom_),
+                WebMercator::geoToGlobalPixel({rectangle->southwest.latitude, rectangle->northeast.longitude}, zoom_),
                 WebMercator::geoToGlobalPixel(rectangle->northeast, zoom_),
-                WebMercator::geoToGlobalPixel(
-                    {rectangle->northeast.latitude, rectangle->southwest.longitude}, zoom_)};
+                WebMercator::geoToGlobalPixel({rectangle->northeast.latitude, rectangle->southwest.longitude}, zoom_)};
         }
         else
         {
@@ -543,7 +549,8 @@ void OfflineMapWidget::updateGeofenceItems()
 
 void OfflineMapWidget::updateTiles()
 {
-    // 只在 GUI 线程计算视野与协调 scene；PNG 读取和解码由线程池完成，避免拖动时阻塞界面。
+    // 只在 GUI 线程计算视野与协调 scene；PNG
+    // 读取和解码由线程池完成，避免拖动时阻塞界面。
     if (viewport()->width() <= 0 || viewport()->height() <= 0)
     {
         return;
@@ -700,7 +707,9 @@ QString OfflineMapWidget::tilePath(int tile_x, int tile_y) const
 
 QString OfflineMapWidget::targetTooltip(const OnlineMapTarget &target)
 {
-    return tr("航迹 ID：%1\n类别：%2\n经度：%3\n纬度：%4\n速度：%5\n距离：%6\n首次出现：%7")
+    return tr("航迹 "
+              "ID：%1\n类别：%2\n经度：%3\n纬度：%4\n速度：%5\n距离：%"
+              "6\n首次出现：%7")
         .arg(target.track_id)
         .arg(targetTypeDisplayName(target.type))
         .arg(target.position.longitude, 0, 'f', 7)

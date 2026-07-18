@@ -8,6 +8,10 @@ set(PROJECT_UI_TARGET "${PROJECT_NAME}_ui")
 # 当前 UI 模块编译为静态库。
 # 以后新增窗口、对话框或自定义控件时，继续在此列表中添加文件。
 add_library(${PROJECT_UI_TARGET} STATIC
+    AlertRuleManagerWidget.cpp
+    AlertRuleManagerWidget.h
+    AlertNotificationWidget.cpp
+    AlertNotificationWidget.h
     BottomStatusBar.cpp
     BottomStatusBar.h
     GeofenceManagerWidget.cpp
@@ -63,6 +67,7 @@ target_include_directories(${PROJECT_UI_TARGET}
 target_link_libraries(${PROJECT_UI_TARGET}
     PUBLIC
         ${PROJECT_NAMESPACE}::core
+        ${PROJECT_NAMESPACE}::alert
         ${PROJECT_NAMESPACE}::history
         ${PROJECT_NAMESPACE}::network
         ${PROJECT_NAMESPACE}::map
