@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QSignalSpy>
 #include <QtTest>
 
 #include "core/RadarTypes.h"
@@ -33,6 +34,7 @@ class TrackWorkbenchTest : public QObject
     void filtersByTargetTypeAndRenumbersVisibleRows();
     void keepsMissingMeasurementsLastForBothSortOrders();
     void preservesSelectionUntilTargetDisappears();
+    void clearsSelectionWhenRequestedTrackIsAbsent();
 };
 
 void TrackWorkbenchTest::defaultsToTrackIdAscendingWithEightColumns()
@@ -102,6 +104,18 @@ void TrackWorkbenchTest::preservesSelectionUntilTargetDisappears()
     QCOMPARE(workbench.selectedTrackId(), std::optional<qint64>(2));
 
     workbench.replaceTracks({makeTrack(3)});
+    QVERIFY(!workbench.selectedTrackId().has_value());
+}
+
+void TrackWorkbenchTest::clearsSelectionWhenRequestedTrackIsAbsent()
+{
+    utms::TrackTableWidget workbench;
+    workbench.replaceTracks({makeTrack(1), makeTrack(2)});
+    QVERIFY(workbench.selectTrackById(2));
+
+    QSignalSpy cleared_spy(&workbench, &utms::TrackTableWidget::targetSelectionCleared);
+    QVERIFY(!workbench.selectTrackById(99));
+    QCOMPARE(cleared_spy.count(), 1);
     QVERIFY(!workbench.selectedTrackId().has_value());
 }
 

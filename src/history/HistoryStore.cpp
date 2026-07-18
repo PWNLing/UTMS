@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <utility>
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -10,6 +11,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -17,6 +19,7 @@
 #include <QUuid>
 #include <QVariant>
 
+#include "alert/AlertCsvExporter.h"
 #include "core/GeofenceGeometry.h"
 #include "history/HistoryCsvExporter.h"
 
@@ -366,7 +369,10 @@ bool migratePhase23AlertSchema(QSqlDatabase &database, QString *error_message) {
                        "FROM target_alerts_phase23"),
         QStringLiteral("DROP TABLE target_alerts_phase23"),
         QStringLiteral("CREATE INDEX idx_target_alerts_time ON "
-                       "target_alerts(occurred_at_ms)")};
+                       "target_alerts(occurred_at_ms)"),
+        QStringLiteral("CREATE INDEX idx_target_alerts_filters ON "
+                       "target_alerts(severity, rule_id, geofence_id, track_id, "
+                       "target_type, acknowledged)")};
 
     for (const QString &statement : migration_statements) {
         QSqlQuery query(database);
@@ -386,6 +392,73 @@ bool migratePhase23AlertSchema(QSqlDatabase &database, QString *error_message) {
         return false;
     }
     return executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), error_message);
+}
+
+std::optional<TargetAlert> targetAlertFromQuery(const QSqlQuery &query, QString *error_message) {
+    const qint64 alert_id = query.value(0).toLongLong();
+    const int rule_type_value = query.value(4).toInt();
+    const int severity_value = query.value(5).toInt();
+    const int target_type_value = query.value(9).toInt();
+    const double latitude = query.value(10).toDouble();
+    const double longitude = query.value(11).toDouble();
+    if (alert_id <= 0 || !isValidAlertRuleTypeValue(rule_type_value) || !isValidAlertSeverityValue(severity_value) ||
+        !isValidTargetTypeValue(target_type_value) || !std::isfinite(latitude) || !std::isfinite(longitude)) {
+        setError(error_message,
+                 storeText(QT_TRANSLATE_NOOP("HistoryStore", "目标告警 %1 的持久化数据无效")).arg(alert_id));
+        return std::nullopt;
+    }
+
+    TargetAlert alert;
+    alert.id = alert_id;
+    alert.occurred_at = QDateTime::fromMSecsSinceEpoch(query.value(1).toLongLong(), QTimeZone::UTC);
+    alert.rule_id = query.value(2).toLongLong();
+    alert.rule_name = query.value(3).toString();
+    alert.rule_type = static_cast<AlertRuleType>(rule_type_value);
+    alert.severity = static_cast<AlertSeverity>(severity_value);
+    alert.geofence_id = query.value(6).toLongLong();
+    alert.geofence_name = query.value(7).toString();
+    alert.track_id = query.value(8).toLongLong();
+    alert.target_type = static_cast<TargetType>(target_type_value);
+    alert.position = {latitude, longitude};
+    if (!query.value(12).isNull()) {
+        alert.velocity_mps = query.value(12).toDouble();
+    }
+    if (!query.value(13).isNull()) {
+        alert.distance_m = query.value(13).toDouble();
+    }
+    alert.description = query.value(14).toString();
+    alert.acknowledged = query.value(15).toBool();
+    if (!query.value(16).isNull()) {
+        alert.acknowledged_at = QDateTime::fromMSecsSinceEpoch(query.value(16).toLongLong(), QTimeZone::UTC);
+    }
+    alert.acknowledged_by = query.value(17).toString();
+    alert.handling_note = query.value(18).toString();
+    return alert;
+}
+
+bool validateAlertQuery(const AlertQuery &query, QString *error_message) {
+    if (query.start_time.has_value() && !query.start_time->isValid()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "告警查询开始时间无效")));
+        return false;
+    }
+    if (query.end_time.has_value() && !query.end_time->isValid()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "告警查询结束时间无效")));
+        return false;
+    }
+    if (query.start_time.has_value() && query.end_time.has_value() &&
+        query.start_time.value() > query.end_time.value()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "告警查询开始时间晚于结束时间")));
+        return false;
+    }
+    if ((query.rule_id.has_value() && query.rule_id.value() <= 0) ||
+        (query.geofence_id.has_value() && query.geofence_id.value() <= 0) ||
+        (query.track_id.has_value() && query.track_id.value() <= 0) ||
+        (query.severity.has_value() && !isValidAlertSeverityValue(static_cast<int>(query.severity.value()))) ||
+        (query.target_type.has_value() && !isValidTargetTypeValue(static_cast<int>(query.target_type.value())))) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "告警查询条件无效")));
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -512,6 +585,11 @@ bool HistoryStore::initialize(QString *error_message) {
         !executeSchemaStatement(database,
                                 QStringLiteral("CREATE INDEX IF NOT EXISTS idx_target_alerts_time "
                                                "ON target_alerts(occurred_at_ms)"),
+                                error_message) ||
+        !executeSchemaStatement(database,
+                                QStringLiteral("CREATE INDEX IF NOT EXISTS idx_target_alerts_filters "
+                                               "ON target_alerts(severity, rule_id, geofence_id, track_id, "
+                                               "target_type, acknowledged)"),
                                 error_message)) {
         database.close();
         database = QSqlDatabase();
@@ -966,6 +1044,29 @@ std::optional<HistoryQueryResult> HistoryStore::queryHistory(const HistoryQuery 
             track.first_seen_at = QDateTime::fromMSecsSinceEpoch(query.value(14).toLongLong(), QTimeZone::UTC);
         }
         result.frames.last().tracks.append(track);
+    }
+
+    if (!result.frames.isEmpty()) {
+        QDateTime first_received_at = result.frames.constFirst().received_at;
+        QDateTime last_received_at = first_received_at;
+        for (const HistoryFrameRecord &frame : std::as_const(result.frames)) {
+            if (frame.received_at < first_received_at) {
+                first_received_at = frame.received_at;
+            }
+            if (frame.received_at > last_received_at) {
+                last_received_at = frame.received_at;
+            }
+        }
+        AlertQuery alert_query;
+        alert_query.start_time = first_received_at;
+        alert_query.end_time = last_received_at;
+        alert_query.track_id = history_query.track_id;
+        alert_query.target_type = history_query.target_type;
+        const std::optional<AlertQueryResult> alerts = queryTargetAlerts(alert_query, error_message);
+        if (!alerts.has_value()) {
+            return std::nullopt;
+        }
+        result.alerts = alerts->alerts;
     }
     return result;
 }
@@ -1605,11 +1706,14 @@ std::optional<TargetAlert> HistoryStore::loadTargetAlert(qint64 alert_id, QStrin
 
     QSqlDatabase database = QSqlDatabase::database(connection_name_);
     QSqlQuery query(database);
-    query.prepare(QStringLiteral("SELECT occurred_at_ms, rule_id, rule_name, "
-                                 "rule_type, severity, geofence_id, "
-                                 "geofence_name, track_id, target_type, "
-                                 "latitude, longitude, velocity_mps, distance_m, "
-                                 "description FROM target_alerts WHERE id = ?"));
+    query.prepare(
+        QStringLiteral("SELECT id, occurred_at_ms, rule_id, rule_name, "
+                       "rule_type, severity, geofence_id, "
+                       "geofence_name, track_id, target_type, latitude, "
+                       "longitude, velocity_mps, "
+                       "distance_m, description, acknowledged, "
+                       "acknowledged_at_ms, acknowledged_by, "
+                       "handling_note FROM target_alerts WHERE id = ?"));
     query.addBindValue(alert_id);
     if (!query.exec()) {
         setError(error_message,
@@ -1620,36 +1724,178 @@ std::optional<TargetAlert> HistoryStore::loadTargetAlert(qint64 alert_id, QStrin
         setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "目标告警 %1 不存在")).arg(alert_id));
         return std::nullopt;
     }
-    const int rule_type_value = query.value(3).toInt();
-    const int severity_value = query.value(4).toInt();
-    const int target_type_value = query.value(8).toInt();
-    if (!isValidAlertRuleTypeValue(rule_type_value) || !isValidAlertSeverityValue(severity_value) ||
-        !isValidTargetTypeValue(target_type_value)) {
-        setError(error_message,
-                 storeText(QT_TRANSLATE_NOOP("HistoryStore", "目标告警 %1 的持久化数据无效")).arg(alert_id));
+    return targetAlertFromQuery(query, error_message);
+}
+
+std::optional<AlertQueryResult> HistoryStore::queryTargetAlerts(const AlertQuery &alert_query,
+                                                                QString *error_message) const {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return std::nullopt;
+    }
+    if (!validateAlertQuery(alert_query, error_message)) {
         return std::nullopt;
     }
 
-    TargetAlert alert;
-    alert.id = alert_id;
-    alert.occurred_at = QDateTime::fromMSecsSinceEpoch(query.value(0).toLongLong(), QTimeZone::UTC);
-    alert.rule_id = query.value(1).toLongLong();
-    alert.rule_name = query.value(2).toString();
-    alert.rule_type = static_cast<AlertRuleType>(rule_type_value);
-    alert.severity = static_cast<AlertSeverity>(severity_value);
-    alert.geofence_id = query.value(5).toLongLong();
-    alert.geofence_name = query.value(6).toString();
-    alert.track_id = query.value(7).toLongLong();
-    alert.target_type = static_cast<TargetType>(target_type_value);
-    alert.position = {query.value(9).toDouble(), query.value(10).toDouble()};
-    if (!query.value(11).isNull()) {
-        alert.velocity_mps = query.value(11).toDouble();
+    QString sql = QStringLiteral(
+        "SELECT id, occurred_at_ms, rule_id, rule_name, "
+        "rule_type, severity, geofence_id, geofence_name, "
+        "track_id, target_type, latitude, longitude, "
+        "velocity_mps, distance_m, description, acknowledged, "
+        "acknowledged_at_ms, acknowledged_by, handling_note FROM "
+        "target_alerts WHERE 1 = 1");
+    QVariantList bindings;
+    if (alert_query.start_time.has_value()) {
+        sql += QStringLiteral(" AND occurred_at_ms >= ?");
+        bindings.append(alert_query.start_time->toMSecsSinceEpoch());
     }
-    if (!query.value(12).isNull()) {
-        alert.distance_m = query.value(12).toDouble();
+    if (alert_query.end_time.has_value()) {
+        sql += QStringLiteral(" AND occurred_at_ms <= ?");
+        bindings.append(alert_query.end_time->toMSecsSinceEpoch());
     }
-    alert.description = query.value(13).toString();
-    return alert;
+    if (alert_query.severity.has_value()) {
+        sql += QStringLiteral(" AND severity = ?");
+        bindings.append(static_cast<int>(alert_query.severity.value()));
+    }
+    if (alert_query.rule_id.has_value()) {
+        sql += QStringLiteral(" AND rule_id = ?");
+        bindings.append(alert_query.rule_id.value());
+    }
+    if (alert_query.geofence_id.has_value()) {
+        sql += QStringLiteral(" AND geofence_id = ?");
+        bindings.append(alert_query.geofence_id.value());
+    }
+    if (alert_query.track_id.has_value()) {
+        sql += QStringLiteral(" AND track_id = ?");
+        bindings.append(alert_query.track_id.value());
+    }
+    if (alert_query.target_type.has_value()) {
+        sql += QStringLiteral(" AND target_type = ?");
+        bindings.append(static_cast<int>(alert_query.target_type.value()));
+    }
+    if (alert_query.acknowledged.has_value()) {
+        sql += QStringLiteral(" AND acknowledged = ?");
+        bindings.append(alert_query.acknowledged.value() ? 1 : 0);
+    }
+    sql += QStringLiteral(" ORDER BY occurred_at_ms DESC, id DESC");
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    QSqlQuery query(database);
+    query.prepare(sql);
+    for (const QVariant &binding : bindings) {
+        query.addBindValue(binding);
+    }
+    if (!query.exec()) {
+        setError(error_message,
+                 storeText(QT_TRANSLATE_NOOP("HistoryStore", "查询告警历史失败：%1")).arg(query.lastError().text()));
+        return std::nullopt;
+    }
+
+    AlertQueryResult result;
+    result.query = alert_query;
+    while (query.next()) {
+        const std::optional<TargetAlert> alert = targetAlertFromQuery(query, error_message);
+        if (!alert.has_value()) {
+            return std::nullopt;
+        }
+        result.alerts.append(alert.value());
+    }
+
+    QSqlQuery count_query(database);
+    if (!count_query.exec(QStringLiteral("SELECT COUNT(*) FROM target_alerts WHERE acknowledged = 0")) ||
+        !count_query.next()) {
+        setError(
+            error_message,
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "统计未确认告警失败：%1")).arg(count_query.lastError().text()));
+        return std::nullopt;
+    }
+    const qint64 unacknowledged_count = count_query.value(0).toLongLong();
+    if (unacknowledged_count < 0 || unacknowledged_count > std::numeric_limits<int>::max()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "未确认告警数量超出支持范围")));
+        return std::nullopt;
+    }
+    result.unacknowledged_count = static_cast<int>(unacknowledged_count);
+    return result;
+}
+
+bool HistoryStore::acknowledgeTargetAlerts(const QVector<qint64> &alert_ids, const QString &handling_note,
+                                           const QDateTime &acknowledged_at, const QString &acknowledged_by,
+                                           QString *error_message) {
+    if (!initialized_) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "历史数据库尚未初始化")));
+        return false;
+    }
+    QSet<qint64> unique_alert_ids;
+    for (qint64 alert_id : alert_ids) {
+        if (alert_id <= 0) {
+            setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "待确认的告警 ID 无效")));
+            return false;
+        }
+        unique_alert_ids.insert(alert_id);
+    }
+    if (unique_alert_ids.isEmpty() || !acknowledged_at.isValid() || acknowledged_by.trimmed().isEmpty()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "告警确认请求无效")));
+        return false;
+    }
+
+    QSqlDatabase database = QSqlDatabase::database(connection_name_);
+    if (!database.transaction()) {
+        setError(
+            error_message,
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "开始告警确认事务失败：%1")).arg(database.lastError().text()));
+        return false;
+    }
+
+    QSqlQuery exists_query(database);
+    exists_query.prepare(QStringLiteral("SELECT 1 FROM target_alerts WHERE id = ?"));
+    QSqlQuery update_query(database);
+    update_query.prepare(
+        QStringLiteral("UPDATE target_alerts SET acknowledged = 1, acknowledged_at_ms = ?, "
+                       "acknowledged_by = ?, handling_note = ? WHERE id = ?"));
+    for (qint64 alert_id : std::as_const(unique_alert_ids)) {
+        exists_query.bindValue(0, alert_id);
+        if (!exists_query.exec() || !exists_query.next()) {
+            const QString operation_error =
+                exists_query.lastError().isValid()
+                    ? storeText(QT_TRANSLATE_NOOP("HistoryStore", "检查目标告警 %1 失败：%2"))
+                          .arg(alert_id)
+                          .arg(exists_query.lastError().text())
+                    : storeText(QT_TRANSLATE_NOOP("HistoryStore", "目标告警 %1 不存在")).arg(alert_id);
+            setTransactionError(database, error_message, operation_error);
+            return false;
+        }
+        exists_query.finish();
+
+        update_query.bindValue(0, acknowledged_at.toMSecsSinceEpoch());
+        update_query.bindValue(1, acknowledged_by.trimmed());
+        update_query.bindValue(2, handling_note.trimmed());
+        update_query.bindValue(3, alert_id);
+        if (!update_query.exec()) {
+            const QString operation_error = storeText(QT_TRANSLATE_NOOP("HistoryStore", "确认目标告警 %1 失败：%2"))
+                                                .arg(alert_id)
+                                                .arg(update_query.lastError().text());
+            setTransactionError(database, error_message, operation_error);
+            return false;
+        }
+        update_query.finish();
+    }
+
+    if (!database.commit()) {
+        setTransactionError(
+            database, error_message,
+            storeText(QT_TRANSLATE_NOOP("HistoryStore", "提交告警确认事务失败：%1")).arg(database.lastError().text()));
+        return false;
+    }
+    return true;
+}
+
+std::optional<int> HistoryStore::exportTargetAlertsCsv(const AlertQuery &query, const QString &output_path,
+                                                       QString *error_message) const {
+    const std::optional<AlertQueryResult> result = queryTargetAlerts(query, error_message);
+    if (!result.has_value()) {
+        return std::nullopt;
+    }
+    return AlertCsvExporter::exportToFile(result.value(), output_path, error_message);
 }
 
 bool HistoryStore::probeWriteAccess(QString *error_message) {

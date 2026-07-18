@@ -22,6 +22,7 @@ public:
     int currentFrameIndex() const;
     std::optional<RadarFrame> currentFrame() const;
     std::optional<HistoryReplayTrajectory> selectedTrajectory() const;
+    QVector<TargetAlert> currentAlertMarkers() const;
     double playbackRate() const;
     bool setPlaybackRate(double playback_rate);
 
@@ -42,6 +43,7 @@ signals:
     void dataGapSkipped(qint64 gap_ms);
     void selectedTrajectoryChanged(const utms::HistoryReplayTrajectory &trajectory);
     void selectedTrajectoryCleared();
+    void alertMarkersChanged(const QVector<utms::TargetAlert> &alerts);
 
 private:
     void scheduleNextFrame();
@@ -49,12 +51,15 @@ private:
     void moveToFrame(int frame_index);
     void emitDataGapsBetween(int first_frame_index, int second_frame_index);
     void emitSelectedTrajectory();
+    void emitAlertMarkers();
+    int visibleAlertMarkerCount() const;
     static RadarFrame toRadarFrame(const HistoryFrameRecord &record);
 
     QTimer *playback_timer_ = nullptr;
     HistoryQueryResult result_;
     std::optional<qint64> selected_track_id_;
     int current_frame_index_ = -1;
+    int last_emitted_alert_marker_count_ = -1;
     double playback_rate_ = 1.0;
     bool replay_mode_ = false;
     bool playing_ = false;

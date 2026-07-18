@@ -8,6 +8,8 @@ set(PROJECT_UI_TARGET "${PROJECT_NAME}_ui")
 # 当前 UI 模块编译为静态库。
 # 以后新增窗口、对话框或自定义控件时，继续在此列表中添加文件。
 add_library(${PROJECT_UI_TARGET} STATIC
+    AlertCenterWidget.cpp
+    AlertCenterWidget.h
     AlertRuleManagerWidget.cpp
     AlertRuleManagerWidget.h
     AlertNotificationWidget.cpp

@@ -33,7 +33,18 @@ bool HistoryPlaybackController::beginReplay(const HistoryQueryResult &result) {
                      [](const HistoryFrameRecord &left, const HistoryFrameRecord &right) {
                          return left.frame_time < right.frame_time;
                      });
+    result_.alerts.erase(std::remove_if(result_.alerts.begin(), result_.alerts.end(),
+                                        [](const TargetAlert &alert) { return !alert.occurred_at.isValid(); }),
+                         result_.alerts.end());
+    std::stable_sort(result_.alerts.begin(), result_.alerts.end(),
+                     [](const TargetAlert &left, const TargetAlert &right) {
+                         if (left.occurred_at != right.occurred_at) {
+                             return left.occurred_at < right.occurred_at;
+                         }
+                         return left.id < right.id;
+                     });
     current_frame_index_ = 0;
+    last_emitted_alert_marker_count_ = -1;
     selected_track_id_.reset();
     replay_mode_ = true;
     emit replayModeChanged(true);
@@ -77,11 +88,10 @@ std::optional<HistoryReplayTrajectory> HistoryPlaybackController::selectedTrajec
             continue;
         }
 
-        const qint64 track_gap_ms =
-            previous_track_frame_index >= 0
-                ? result_.frames.at(previous_track_frame_index)
-                      .frame_time.msecsTo(result_.frames.at(frame_index).frame_time)
-                : 0;
+        const qint64 track_gap_ms = previous_track_frame_index >= 0
+                                        ? result_.frames.at(previous_track_frame_index)
+                                              .frame_time.msecsTo(result_.frames.at(frame_index).frame_time)
+                                        : 0;
         if (track_gap_ms > kLongDataGapMs) {
             trajectory.segments.append(current_segment);
             current_segment.clear();
@@ -99,12 +109,15 @@ std::optional<HistoryReplayTrajectory> HistoryPlaybackController::selectedTrajec
     return trajectory;
 }
 
+QVector<TargetAlert> HistoryPlaybackController::currentAlertMarkers() const {
+    return result_.alerts.mid(0, visibleAlertMarkerCount());
+}
+
 double HistoryPlaybackController::playbackRate() const { return playback_rate_; }
 
 bool HistoryPlaybackController::setPlaybackRate(double playback_rate) {
-    const bool supported = std::any_of(kPlaybackRates.cbegin(), kPlaybackRates.cend(), [playback_rate](double rate) {
-        return std::abs(rate - playback_rate) < 0.001;
-    });
+    const bool supported = std::any_of(kPlaybackRates.cbegin(), kPlaybackRates.cend(),
+                                       [playback_rate](double rate) { return std::abs(rate - playback_rate) < 0.001; });
     if (!supported) {
         return false;
     }
@@ -144,9 +157,11 @@ void HistoryPlaybackController::returnToLive() {
     pause();
     replay_mode_ = false;
     current_frame_index_ = -1;
+    last_emitted_alert_marker_count_ = -1;
     selected_track_id_.reset();
     result_ = {};
     emit selectedTrajectoryCleared();
+    emit alertMarkersChanged({});
     emit replayModeChanged(false);
 }
 
@@ -219,9 +234,7 @@ void HistoryPlaybackController::scheduleNextFrame() {
             pause();
         } else {
             // 让事件循环先处理跳帧产生的界面更新，再按下一段的真实时间间隔继续播放。
-            QTimer::singleShot(0, this, [this]() {
-                scheduleNextFrame();
-            });
+            QTimer::singleShot(0, this, [this]() { scheduleNextFrame(); });
         }
         return;
     }
@@ -251,6 +264,7 @@ void HistoryPlaybackController::moveToFrame(int frame_index) {
     const HistoryFrameRecord &record = result_.frames.at(frame_index);
     emit frameChanged(toRadarFrame(record), frame_index, result_.frames.size(), record.frame_time);
     emitSelectedTrajectory();
+    emitAlertMarkers();
 }
 
 void HistoryPlaybackController::emitDataGapsBetween(int first_frame_index, int second_frame_index) {
@@ -277,6 +291,26 @@ void HistoryPlaybackController::emitSelectedTrajectory() {
     } else {
         emit selectedTrajectoryCleared();
     }
+}
+
+void HistoryPlaybackController::emitAlertMarkers() {
+    const int marker_count = visibleAlertMarkerCount();
+    if (marker_count == last_emitted_alert_marker_count_) {
+        return;
+    }
+    last_emitted_alert_marker_count_ = marker_count;
+    emit alertMarkersChanged(result_.alerts.mid(0, marker_count));
+}
+
+int HistoryPlaybackController::visibleAlertMarkerCount() const {
+    if (!replay_mode_ || current_frame_index_ < 0 || current_frame_index_ >= result_.frames.size()) {
+        return 0;
+    }
+    const QDateTime current_frame_time = result_.frames.at(current_frame_index_).received_at;
+    const auto first_future_alert =
+        std::upper_bound(result_.alerts.cbegin(), result_.alerts.cend(), current_frame_time,
+                         [](const QDateTime &time, const TargetAlert &alert) { return time < alert.occurred_at; });
+    return static_cast<int>(std::distance(result_.alerts.cbegin(), first_future_alert));
 }
 
 RadarFrame HistoryPlaybackController::toRadarFrame(const HistoryFrameRecord &record) {

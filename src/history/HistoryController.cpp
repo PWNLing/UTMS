@@ -16,8 +16,11 @@ constexpr int kMaximumWriteBatchSize = 32;
 } // namespace
 
 HistoryController::HistoryController(QObject *parent)
-    : QObject(parent), retry_timer_(new QTimer(this)), maintenance_timer_(new QTimer(this)),
-      sampling_timer_(new QTimer(this)), write_batch_timer_(new QTimer(this)) {
+    : QObject(parent),
+      retry_timer_(new QTimer(this)),
+      maintenance_timer_(new QTimer(this)),
+      sampling_timer_(new QTimer(this)),
+      write_batch_timer_(new QTimer(this)) {
     qRegisterMetaType<HistoryConfiguration>();
     qRegisterMetaType<HistoryQuery>();
     qRegisterMetaType<HistoryQueryResult>();
@@ -25,6 +28,11 @@ HistoryController::HistoryController(QObject *parent)
     qRegisterMetaType<Geofence>();
     qRegisterMetaType<AlertRule>();
     qRegisterMetaType<TargetAlert>();
+    qRegisterMetaType<AlertQuery>();
+    qRegisterMetaType<AlertQueryResult>();
+    qRegisterMetaType<AlertAcknowledgementRequest>();
+    qRegisterMetaType<AlertExportRequest>();
+    qRegisterMetaType<QVector<TargetAlert>>();
     qRegisterMetaType<QVector<HistorySession>>();
     qRegisterMetaType<QVector<Geofence>>();
     qRegisterMetaType<QVector<AlertRule>>();
@@ -396,6 +404,56 @@ void HistoryController::persistTargetAlert(const TargetAlert &alert) {
     }
     qInfo() << "HistoryController: persisted target alert" << alert_id.value() << alert.rule_id << alert.track_id;
     emit targetAlertPersisted(alert_id.value());
+}
+
+void HistoryController::queryTargetAlerts(const AlertQuery &query) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit targetAlertErrorOccurred(tr("历史数据库不可用，无法查询告警"));
+        return;
+    }
+
+    QString error;
+    const std::optional<AlertQueryResult> result = store_->queryTargetAlerts(query, &error);
+    if (!result.has_value()) {
+        qWarning() << "HistoryController: failed to query target alerts" << error;
+        emit targetAlertErrorOccurred(error);
+        return;
+    }
+    emit targetAlertsLoaded(result.value());
+}
+
+void HistoryController::acknowledgeTargetAlerts(const AlertAcknowledgementRequest &request) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit targetAlertErrorOccurred(tr("历史数据库不可用，无法确认告警"));
+        return;
+    }
+
+    QString error;
+    if (!store_->acknowledgeTargetAlerts(request.alert_ids, request.handling_note, QDateTime::currentDateTimeUtc(),
+                                         QStringLiteral("root"), &error)) {
+        qWarning() << "HistoryController: failed to acknowledge target alerts" << error;
+        emit targetAlertErrorOccurred(error);
+        return;
+    }
+    qInfo() << "HistoryController: acknowledged target alerts" << request.alert_ids.size() << "operator root";
+    emit targetAlertsAcknowledged(request.alert_ids.size());
+}
+
+void HistoryController::exportTargetAlertsCsv(const AlertExportRequest &request) {
+    if (shutting_down_ || store_ == nullptr) {
+        emit targetAlertErrorOccurred(tr("历史数据库不可用，无法导出告警 CSV"));
+        return;
+    }
+
+    QString error;
+    const std::optional<int> record_count = store_->exportTargetAlertsCsv(request.query, request.output_path, &error);
+    if (!record_count.has_value()) {
+        qWarning() << "HistoryController: failed to export target alerts" << error;
+        emit targetAlertErrorOccurred(error);
+        return;
+    }
+    qInfo() << "HistoryController: exported target alerts CSV" << request.output_path << record_count.value();
+    emit targetAlertExportCompleted(request.output_path, record_count.value());
 }
 
 void HistoryController::refreshHistoryInfo() {

@@ -139,6 +139,7 @@ void MapPanel::setReplayMode(bool replay_mode)
 
     replay_mode_ = replay_mode;
     replay_trajectory_.reset();
+    clearAlertMarkers();
     if (replay_mode_)
     {
         renderTrajectories(QDateTime::currentDateTime());
@@ -302,6 +303,19 @@ void MapPanel::setGeofences(const QVector<Geofence> &geofences)
     }
 }
 
+void MapPanel::setAlertMarkers(const QVector<TargetAlert> &alerts)
+{
+    replay_alert_markers_ = alerts;
+    refreshAlertMarkers();
+}
+
+void MapPanel::clearAlertMarkers()
+{
+    replay_alert_markers_.clear();
+    located_alert_.reset();
+    refreshAlertMarkers();
+}
+
 bool MapPanel::setEditableGeofenceId(std::optional<qint64> geofence_id)
 {
     if (geofence_id.has_value())
@@ -419,10 +433,52 @@ bool MapPanel::locateGeofence(qint64 geofence_id)
     return true;
 }
 
-bool MapPanel::flashAlertTarget(qint64 track_id, int duration_ms)
+bool MapPanel::locateAlert(const TargetAlert &alert)
 {
-    return flashAlertTargets({track_id}, duration_ms);
+    if (alert.id <= 0 || !std::isfinite(alert.position.latitude) || !std::isfinite(alert.position.longitude))
+    {
+        return false;
+    }
+
+    located_alert_ = alert;
+    refreshAlertMarkers();
+    state_.setCenter(alert.position);
+    applyViewToActiveMap();
+    const auto target = std::find_if(state_.currentFrame().tracks.cbegin(), state_.currentFrame().tracks.cend(),
+                                     [&alert](const TrackData &track) { return track.track_id == alert.track_id; });
+    if (target != state_.currentFrame().tracks.cend())
+    {
+        setSelectedTrackId(alert.track_id);
+    }
+    else
+    {
+        setSelectedTrackId(std::nullopt);
+    }
+    return true;
 }
+
+void MapPanel::refreshAlertMarkers()
+{
+    alert_markers_ = replay_alert_markers_;
+    if (located_alert_.has_value())
+    {
+        const auto existing = std::find_if(alert_markers_.begin(), alert_markers_.end(),
+                                           [this](const TargetAlert &candidate)
+                                           { return candidate.id == located_alert_->id; });
+        if (existing == alert_markers_.end())
+        {
+            alert_markers_.append(located_alert_.value());
+        }
+        else
+        {
+            *existing = located_alert_.value();
+        }
+    }
+    online_map_->setAlertMarkers(alert_markers_);
+    offline_map_->setAlertMarkers(alert_markers_);
+}
+
+bool MapPanel::flashAlertTarget(qint64 track_id, int duration_ms) { return flashAlertTargets({track_id}, duration_ms); }
 
 bool MapPanel::flashAlertTargets(const QVector<qint64> &track_ids, int duration_ms)
 {
@@ -476,6 +532,8 @@ QVector<RealtimeTrajectory> MapPanel::realtimeTrajectories(const QDateTime &now)
 }
 
 const QVector<Geofence> &MapPanel::geofences() const { return geofences_; }
+
+const QVector<TargetAlert> &MapPanel::alertMarkers() const { return alert_markers_; }
 
 void MapPanel::handleTargetClicked(qint64 track_id)
 {
@@ -578,11 +636,13 @@ void MapPanel::synchronizeActiveMap()
         online_map_->setLayer(state_.layer());
         online_map_->setSelectedTrackId(state_.selectedTrackId());
         online_map_->setAlertTrackIds(alert_track_ids_);
+        online_map_->setAlertMarkers(alert_markers_);
     }
     else
     {
         offline_map_->renderState(state_);
         offline_map_->setAlertTrackIds(alert_track_ids_);
+        offline_map_->setAlertMarkers(alert_markers_);
     }
     applyViewToActiveMap();
     renderTrajectories(QDateTime::currentDateTime());

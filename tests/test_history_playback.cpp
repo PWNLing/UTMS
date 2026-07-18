@@ -36,6 +36,7 @@ private slots:
     void seekingAcrossALongGapShowsTheInterruption();
     void returningToLiveStopsPlaybackAndClearsReplayState();
     void playbackResumesNormalTimingAfterSkippingAGap();
+    void replayMarkersComeOnlyFromPersistedAlertsInTheQueryResult();
 };
 
 void HistoryPlaybackTest::operatorCanNavigateAndSeekToTheNearestQueriedFrame() {
@@ -211,6 +212,51 @@ void HistoryPlaybackTest::playbackResumesNormalTimingAfterSkippingAGap() {
     QTest::qWait(150);
     QCOMPARE(controller.currentFrameIndex(), 2);
     QTRY_COMPARE_WITH_TIMEOUT(controller.currentFrameIndex(), 3, 200);
+}
+
+void HistoryPlaybackTest::replayMarkersComeOnlyFromPersistedAlertsInTheQueryResult() {
+    utms::HistoryQueryResult result;
+    result.frames = {
+        makePlaybackFrame(1'000, 1),
+        makePlaybackFrame(2'000, 2),
+        makePlaybackFrame(3'000, 3),
+    };
+    result.frames[0].received_at = QDateTime::fromMSecsSinceEpoch(100'000, QTimeZone::UTC);
+    result.frames[1].received_at = QDateTime::fromMSecsSinceEpoch(100'500, QTimeZone::UTC);
+    result.frames[2].received_at = QDateTime::fromMSecsSinceEpoch(102'000, QTimeZone::UTC);
+    utms::TargetAlert persisted_alert;
+    persisted_alert.id = 17;
+    persisted_alert.occurred_at = QDateTime::fromMSecsSinceEpoch(101'000, QTimeZone::UTC);
+    persisted_alert.rule_id = 3;
+    persisted_alert.rule_name = QStringLiteral("车辆进入");
+    persisted_alert.geofence_id = 7;
+    persisted_alert.geofence_name = QStringLiteral("重点区域");
+    persisted_alert.track_id = 42;
+    persisted_alert.target_type = utms::TargetType::kCar;
+    persisted_alert.position = {25.31, 110.41};
+    persisted_alert.description = QStringLiteral("持久化告警事实");
+    result.alerts = {persisted_alert};
+
+    utms::HistoryPlaybackController controller;
+    QSignalSpy marker_spy(&controller, &utms::HistoryPlaybackController::alertMarkersChanged);
+    QVERIFY(controller.beginReplay(result));
+    QCOMPARE(controller.currentAlertMarkers().size(), 0);
+    QCOMPARE(marker_spy.size(), 1);
+
+    controller.nextFrame();
+    QCOMPARE(controller.currentAlertMarkers().size(), 0);
+    QCOMPARE(marker_spy.size(), 1);
+
+    controller.nextFrame();
+    QCOMPARE(controller.currentAlertMarkers().size(), 1);
+    QCOMPARE(controller.currentAlertMarkers().constFirst().id, 17);
+    QCOMPARE(marker_spy.size(), 2);
+    QCOMPARE(marker_spy.constLast().constFirst().value<QVector<utms::TargetAlert>>().size(), 1);
+
+    controller.previousFrame();
+    QCOMPARE(controller.currentAlertMarkers().size(), 0);
+    QCOMPARE(marker_spy.size(), 3);
+    QCOMPARE(result.alerts.size(), 1);
 }
 
 QTEST_GUILESS_MAIN(HistoryPlaybackTest)

@@ -14,6 +14,9 @@
         .point.selected { width: 14px; height: 14px; border: 3px solid #f1c40f; }
         .point.alert-highlight { width: 18px; height: 18px; border: 4px solid #cf1322;
                                  box-shadow: 0 0 0 4px rgba(207,19,34,.25); }
+        .alert-marker { width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box;
+                        border: 3px solid #cf1322; background: rgba(207,19,34,.35);
+                        box-shadow: 0 1px 4px rgba(92,0,17,.55); }
     </style>
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 </head>
@@ -24,6 +27,7 @@
 (() => {
     const targetMarkers = new Map();
     let trajectoryPolylines = [];
+    const alertLocationMarkers = new Map();
     let geofenceOverlays = [];
     const geofenceOverlayById = new Map();
     let editableGeofenceId = null;
@@ -145,6 +149,49 @@
             });
         });
         if (trajectoryPolylines.length > 0) map.add(trajectoryPolylines);
+    };
+
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[character]);
+
+    const replaceAlertMarkers = alerts => {
+        const nextAlertIds = new Set(alerts.map(alert => String(alert.id)));
+        alertLocationMarkers.forEach((entry, alertId) => {
+            if (nextAlertIds.has(alertId)) return;
+            entry.info.close();
+            map.remove(entry.marker);
+            alertLocationMarkers.delete(alertId);
+        });
+        const addedMarkers = [];
+        alerts.forEach(alert => {
+            const alertId = String(alert.id);
+            const detail = `告警: ${escapeHtml(alert.description)}<br>等级: ${escapeHtml(alert.severity)}`
+                + `<br>规则: ${escapeHtml(alert.rule)}<br>围栏: ${escapeHtml(alert.geofence)}`
+                + `<br>航迹 ID: ${escapeHtml(alert.trackId)}<br>类别: ${escapeHtml(alert.targetType)}`
+                + `<br>坐标: ${escapeHtml(alert.latitude)}, ${escapeHtml(alert.longitude)}`
+                + `<br>速度: ${escapeHtml(alert.velocity)} m/s<br>距离: ${escapeHtml(alert.distance)} m`
+                + `<br>发生时间: ${escapeHtml(alert.occurredAt)}`
+                + `<br>确认状态: ${alert.acknowledged ? '已确认' : '未确认'}`
+                + `<br>确认时间: ${escapeHtml(alert.acknowledgedAt)}`
+                + `<br>确认人: ${escapeHtml(alert.acknowledgedBy)}`
+                + `<br>处理备注: ${escapeHtml(alert.handlingNote)}`;
+            const existing = alertLocationMarkers.get(alertId);
+            if (existing) {
+                existing.detail = detail;
+                existing.marker.setPosition(position(alert));
+                return;
+            }
+            const marker = new AMap.Marker({anchor: 'center', content: '<div class="alert-marker"></div>',
+                position: position(alert), zIndex: 118});
+            const info = new AMap.InfoWindow({offset: new AMap.Pixel(0, -10)});
+            const entry = {marker, info, detail};
+            marker.on('mouseover', () => { info.setContent(entry.detail); info.open(map, marker.getPosition()); });
+            marker.on('mouseout', () => info.close());
+            alertLocationMarkers.set(alertId, entry);
+            addedMarkers.push(marker);
+        });
+        if (addedMarkers.length > 0) map.add(addedMarkers);
     };
 
     const lngLatObject = lngLat => ({
@@ -277,6 +324,7 @@
         setAlertHighlights(state.alertTrackIds || []);
         replaceTrajectories(state.trajectories || []);
         replaceGeofences(state.geofences || []);
+        replaceAlertMarkers(state.alertMarkers || []);
     };
 
     const applyUpdate = update => {
@@ -299,6 +347,7 @@
         bridge.layerUpdated.connect(setLayer);
         bridge.selectionUpdated.connect(setSelection);
         bridge.alertHighlightUpdated.connect(setAlertHighlights);
+        bridge.alertMarkersUpdated.connect(replaceAlertMarkers);
         bridge.trajectoriesUpdated.connect(replaceTrajectories);
         bridge.geofencesUpdated.connect(replaceGeofences);
         bridge.geofenceEditingUpdated.connect(setEditableGeofence);

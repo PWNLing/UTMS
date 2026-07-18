@@ -29,6 +29,7 @@ class TrackTableWidget : public QWidget
     std::optional<TargetType> targetTypeFilter() const;
     std::optional<qint64> selectedTrackId() const;
     bool selectTrackById(qint64 track_id);
+    void clearTargetSelection();
 
     signals:
     void targetSelected(qint64 track_id);

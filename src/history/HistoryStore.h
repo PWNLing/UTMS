@@ -46,6 +46,12 @@ class HistoryStore {
     bool deleteAlertRule(qint64 rule_id, QString *error_message = nullptr);
     std::optional<qint64> appendTargetAlert(const TargetAlert &alert, QString *error_message = nullptr);
     std::optional<TargetAlert> loadTargetAlert(qint64 alert_id, QString *error_message = nullptr) const;
+    std::optional<AlertQueryResult> queryTargetAlerts(const AlertQuery &query, QString *error_message = nullptr) const;
+    bool acknowledgeTargetAlerts(const QVector<qint64> &alert_ids, const QString &handling_note,
+                                 const QDateTime &acknowledged_at, const QString &acknowledged_by,
+                                 QString *error_message = nullptr);
+    std::optional<int> exportTargetAlertsCsv(const AlertQuery &query, const QString &output_path,
+                                             QString *error_message = nullptr) const;
     bool probeWriteAccess(QString *error_message = nullptr);
     qint64 databaseSizeBytes() const;
 

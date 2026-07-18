@@ -7,6 +7,7 @@
 #include <QString>
 #include <QVector>
 
+#include "alert/AlertTypes.h"
 #include "core/RadarTypes.h"
 
 namespace utms {
@@ -49,6 +50,7 @@ struct HistoryFrameRecord {
 struct HistoryQueryResult {
     HistoryQuery query;
     QVector<HistoryFrameRecord> frames;
+    QVector<TargetAlert> alerts;
 
     int targetCount() const {
         int count = 0;

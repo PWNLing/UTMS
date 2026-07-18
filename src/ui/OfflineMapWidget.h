@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QSet>
 
+#include "alert/AlertTypes.h"
 #include "core/GeofenceTypes.h"
 #include "map/OnlineMapState.h"
 #include "map/RealtimeTrajectoryModel.h"
@@ -38,6 +39,7 @@ class OfflineMapWidget : public QGraphicsView
     void setView(const GeoPosition &center, int zoom);
     void setSelectedTrackId(std::optional<qint64> track_id);
     void setAlertTrackIds(const QSet<qint64> &track_ids);
+    void setAlertMarkers(const QVector<TargetAlert> &alerts);
 
   signals:
     void targetClicked(qint64 track_id);
@@ -55,6 +57,7 @@ class OfflineMapWidget : public QGraphicsView
     void updateMarkers();
     void updateTrajectoryItems();
     void updateGeofenceItems();
+    void updateAlertMarkerItems();
     void updateTiles();
     void requestTile(const QString &key, const QString &path, const QPointF &position_px);
     void updateMissingLabel();
@@ -77,6 +80,7 @@ class OfflineMapWidget : public QGraphicsView
     QVector<QGraphicsPathItem *> trajectory_items_;
     QVector<QGraphicsPathItem *> geofence_items_;
     QVector<QGraphicsEllipseItem *> geofence_handle_items_;
+    QHash<qint64, QGraphicsEllipseItem *> alert_marker_items_;
     QGraphicsEllipseItem *radar_item_ = nullptr;
     QGraphicsSimpleTextItem *selection_label_ = nullptr;
     QSet<QString> required_tile_keys_;
@@ -89,6 +93,7 @@ class OfflineMapWidget : public QGraphicsView
     bool applying_view_ = false;
     std::optional<qint64> editable_geofence_id_;
     QSet<qint64> alert_track_ids_;
+    QVector<TargetAlert> alert_markers_;
     QGraphicsItem *active_geofence_edit_item_ = nullptr;
 };
 

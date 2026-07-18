@@ -5,6 +5,7 @@
 #include <QSet>
 #include <QWidget>
 
+#include "alert/AlertTypes.h"
 #include "core/GeofenceTypes.h"
 #include "map/OnlineMapState.h"
 #include "map/RealtimeTrajectoryModel.h"
@@ -31,6 +32,7 @@ class OnlineMapWidget : public QWidget
     void setLayer(OnlineMapLayer layer);
     void setSelectedTrackId(std::optional<qint64> track_id);
     void setAlertTrackIds(const QSet<qint64> &track_ids);
+    void setAlertMarkers(const QVector<TargetAlert> &alerts);
     void setTrajectories(const QVector<RealtimeTrajectory> &trajectories);
     void setGeofences(const QVector<Geofence> &geofences);
     void setEditableGeofenceId(std::optional<qint64> geofence_id);
@@ -54,6 +56,7 @@ class OnlineMapWidget : public QWidget
     static QJsonObject createUpdateObject(const OnlineMapUpdate &update);
     static QJsonArray createTrajectoriesArray(const QVector<RealtimeTrajectory> &trajectories);
     static QJsonArray createGeofencesArray(const QVector<Geofence> &geofences);
+    static QJsonArray createAlertMarkersArray(const QVector<TargetAlert> &alerts);
     void handleRenderProcessTermination(int status, int exit_code);
     void showError(const QString &message);
 
@@ -62,6 +65,7 @@ class OnlineMapWidget : public QWidget
     QVector<Geofence> geofences_;
     std::optional<qint64> editable_geofence_id_;
     QSet<qint64> alert_track_ids_;
+    QVector<TargetAlert> alert_markers_;
     std::optional<qint64> recently_editable_geofence_id_;
     QStackedLayout *stacked_layout_ = nullptr;
     QWebEngineView *web_view_ = nullptr;

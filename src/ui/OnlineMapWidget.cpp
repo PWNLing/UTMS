@@ -109,6 +109,34 @@ QJsonObject geofenceObject(const Geofence &geofence)
     return object;
 }
 
+QJsonObject alertMarkerObject(const TargetAlert &alert)
+{
+    return {
+        {QStringLiteral("id"), QString::number(alert.id)},
+        {QStringLiteral("longitude"), alert.position.longitude},
+        {QStringLiteral("latitude"), alert.position.latitude},
+        {QStringLiteral("occurredAt"), alert.occurred_at.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))},
+        {QStringLiteral("severity"), alertSeverityDisplayName(alert.severity)},
+        {QStringLiteral("rule"), alert.rule_name},
+        {QStringLiteral("geofence"), alert.geofence_name},
+        {QStringLiteral("trackId"), QString::number(alert.track_id)},
+        {QStringLiteral("targetType"), targetTypeDisplayName(alert.target_type)},
+        {QStringLiteral("velocity"),
+         alert.velocity_mps.has_value() ? QString::number(alert.velocity_mps.value(), 'f', 3) : QStringLiteral("--")},
+        {QStringLiteral("distance"),
+         alert.distance_m.has_value() ? QString::number(alert.distance_m.value(), 'f', 3) : QStringLiteral("--")},
+        {QStringLiteral("description"), alert.description},
+        {QStringLiteral("acknowledged"), alert.acknowledged},
+        {QStringLiteral("acknowledgedAt"),
+         alert.acknowledged_at.has_value()
+             ? alert.acknowledged_at->toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+             : QStringLiteral("--")},
+        {QStringLiteral("acknowledgedBy"),
+         alert.acknowledged_by.isEmpty() ? QStringLiteral("--") : alert.acknowledged_by},
+        {QStringLiteral("handlingNote"),
+         alert.handling_note.isEmpty() ? QStringLiteral("--") : alert.handling_note}};
+}
+
 OnlineMapUpdate createFullUpdate(const OnlineMapState &previous_state, const OnlineMapState &next_state)
 {
     OnlineMapUpdate update;
@@ -237,6 +265,15 @@ void OnlineMapWidget::setAlertTrackIds(const QSet<qint64> &track_ids)
             track_id_array.append(QString::number(track_id));
         }
         emit bridge_->alertHighlightUpdated(track_id_array);
+    }
+}
+
+void OnlineMapWidget::setAlertMarkers(const QVector<TargetAlert> &alerts)
+{
+    alert_markers_ = alerts;
+    if (map_ready_)
+    {
+        emit bridge_->alertMarkersUpdated(createAlertMarkersArray(alert_markers_));
     }
 }
 
@@ -442,7 +479,8 @@ QJsonObject OnlineMapWidget::createInitialState() const
                                                     : QStringLiteral("satellite")},
                       {QStringLiteral("targets"), targets},
                       {QStringLiteral("trajectories"), createTrajectoriesArray(trajectories_)},
-                      {QStringLiteral("geofences"), createGeofencesArray(geofences_)}};
+                      {QStringLiteral("geofences"), createGeofencesArray(geofences_)},
+                      {QStringLiteral("alertMarkers"), createAlertMarkersArray(alert_markers_)}};
     if (render_state_.radarPosition().has_value())
     {
         state.insert(QStringLiteral("radar"), positionObject(render_state_.radarPosition().value()));
@@ -506,6 +544,16 @@ QJsonArray OnlineMapWidget::createGeofencesArray(const QVector<Geofence> &geofen
         {
             objects.append(geofenceObject(geofence));
         }
+    }
+    return objects;
+}
+
+QJsonArray OnlineMapWidget::createAlertMarkersArray(const QVector<TargetAlert> &alerts)
+{
+    QJsonArray objects;
+    for (const TargetAlert &alert : alerts)
+    {
+        objects.append(alertMarkerObject(alert));
     }
     return objects;
 }

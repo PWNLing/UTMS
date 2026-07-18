@@ -19,6 +19,7 @@ class QThread;
 
 namespace utms {
 class MapPanel;
+class AlertCenterWidget;
 class AlertNotificationWidget;
 class AlertRuleManagerWidget;
 class AlertWorker;
@@ -70,6 +71,9 @@ class MainWindow : public QMainWindow {
     void updateAlertRuleRequested(const utms::AlertRule &rule);
     void setAlertRuleEnabledRequested(qint64 rule_id, bool enabled);
     void deleteAlertRuleRequested(qint64 rule_id);
+    void queryTargetAlertsRequested(const utms::AlertQuery &query);
+    void acknowledgeTargetAlertsRequested(const utms::AlertAcknowledgementRequest &request);
+    void exportTargetAlertsRequested(const utms::AlertExportRequest &request);
     void clearAlertStateRequested();
     void shutdownHistoryWorkerRequested();
     void shutdownAlertWorkerRequested();
@@ -94,6 +98,10 @@ class MainWindow : public QMainWindow {
     void handleGeofenceError(const QString &message);
     void handleAlertRulesLoaded(const QVector<utms::AlertRule> &rules);
     void handleAlertRuleError(const QString &message);
+    void handleTargetAlertsLoaded(const utms::AlertQueryResult &result);
+    void handleTargetAlertsAcknowledged(int acknowledged_count);
+    void handleTargetAlertExportCompleted(const QString &output_path, int record_count);
+    void handleTargetAlertError(const QString &message);
     void handleTargetAlert(const utms::TargetAlert &alert);
     void handleAlertWorkerStopped();
     void handleReplayModeChanged(bool replay_mode);
@@ -127,6 +135,7 @@ class MainWindow : public QMainWindow {
     utms::HistoryQueryWidget *history_query_widget_ = nullptr;
     utms::GeofenceManagerWidget *geofence_manager_widget_ = nullptr;
     utms::AlertRuleManagerWidget *alert_rule_manager_widget_ = nullptr;
+    utms::AlertCenterWidget *alert_center_widget_ = nullptr;
     utms::AlertNotificationWidget *alert_notification_widget_ = nullptr;
     utms::TrackTableWidget *track_table_ = nullptr;
     utms::MapPanel *map_panel_ = nullptr;

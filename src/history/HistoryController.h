@@ -41,6 +41,9 @@ class HistoryController : public QObject {
     void setAlertRuleEnabled(qint64 rule_id, bool enabled);
     void deleteAlertRule(qint64 rule_id);
     void persistTargetAlert(const utms::TargetAlert &alert);
+    void queryTargetAlerts(const utms::AlertQuery &query);
+    void acknowledgeTargetAlerts(const utms::AlertAcknowledgementRequest &request);
+    void exportTargetAlertsCsv(const utms::AlertExportRequest &request);
     void refreshHistoryInfo();
     void cleanupExpiredHistory();
     void retryPendingOperations();
@@ -61,6 +64,10 @@ class HistoryController : public QObject {
     void alertRuleErrorOccurred(const QString &message);
     void targetAlertPersisted(qint64 alert_id);
     void targetAlertPersistenceFailed(const QString &message);
+    void targetAlertsLoaded(const utms::AlertQueryResult &result);
+    void targetAlertsAcknowledged(int acknowledged_count);
+    void targetAlertExportCompleted(const QString &output_path, int record_count);
+    void targetAlertErrorOccurred(const QString &message);
     void databaseSizeChanged(qint64 size_bytes);
     void errorOccurred(const QString &message);
     void stopped();

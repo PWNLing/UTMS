@@ -39,6 +39,7 @@ class MapWebBridge : public QObject
     void layerUpdated(const QString &layer);
     void selectionUpdated(const QString &track_id);
     void alertHighlightUpdated(const QJsonArray &track_ids);
+    void alertMarkersUpdated(const QJsonArray &alerts);
     void trajectoriesUpdated(const QJsonArray &trajectories);
     void geofencesUpdated(const QJsonArray &geofences);
     void geofenceEditingUpdated(const QString &geofence_id);

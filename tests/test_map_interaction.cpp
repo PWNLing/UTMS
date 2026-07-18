@@ -24,6 +24,7 @@ class MapInteractionTest : public QObject
     void offlineGeofenceCanBeDraggedAndEmitsUpdatedGeometry();
     void offlineRectangleAndPolygonHandlesCanBeDragged();
     void stalePersistenceEchoDoesNotOverwriteActiveGeofenceEdit();
+    void persistedAlertLocationSurvivesMapSwitchAndSelectsAVisibleTarget();
 };
 
 void MapInteractionTest::liveFrameDoesNotCancelUserDrag()
@@ -327,6 +328,51 @@ void MapInteractionTest::stalePersistenceEchoDoesNotOverwriteActiveGeofenceEdit(
     panel.setGeofences({edited});
     panel.setGeofences({original});
     QCOMPARE(std::get<utms::CircleGeofence>(panel.geofences().constFirst().geometry).radius_m, 100.0);
+}
+
+void MapInteractionTest::persistedAlertLocationSurvivesMapSwitchAndSelectsAVisibleTarget()
+{
+    utms::RadarFrame frame;
+    frame.received_at = QDateTime::currentDateTimeUtc();
+    frame.tracks = {{42, utms::TargetType::kCar, {25.32, 110.42}}};
+
+    utms::TargetAlert alert;
+    alert.id = 17;
+    alert.occurred_at = frame.received_at.addSecs(-1);
+    alert.rule_id = 3;
+    alert.rule_name = QStringLiteral("车辆进入");
+    alert.geofence_id = 7;
+    alert.geofence_name = QStringLiteral("重点区域");
+    alert.track_id = 42;
+    alert.target_type = utms::TargetType::kCar;
+    alert.position = {25.31, 110.41};
+    alert.description = QStringLiteral("目标进入");
+
+    utms::MapPanel panel;
+    panel.setFrame(frame);
+    QVERIFY(panel.locateAlert(alert));
+    QCOMPARE(panel.center().latitude, 25.31);
+    QCOMPARE(panel.center().longitude, 110.41);
+    QCOMPARE(panel.selectedTrackId(), std::optional<qint64>(42));
+    QCOMPARE(panel.alertMarkers().size(), 1);
+
+    utms::TargetAlert replay_alert = alert;
+    replay_alert.id = 18;
+    replay_alert.track_id = 99;
+    panel.setReplayMode(true);
+    panel.setAlertMarkers({replay_alert});
+    QVERIFY(panel.locateAlert(alert));
+    QCOMPARE(panel.alertMarkers().size(), 2);
+
+    panel.setMapMode(utms::MapMode::kOffline);
+    panel.setMapMode(utms::MapMode::kOnline);
+    QCOMPARE(panel.alertMarkers().size(), 2);
+    QSet<qint64> marker_ids;
+    for (const utms::TargetAlert &marker : panel.alertMarkers())
+    {
+        marker_ids.insert(marker.id);
+    }
+    QCOMPARE(marker_ids, QSet<qint64>({17, 18}));
 }
 
 int main(int argc, char *argv[])

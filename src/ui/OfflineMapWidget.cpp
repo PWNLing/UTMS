@@ -147,6 +147,7 @@ void OfflineMapWidget::setView(const GeoPosition &center, int zoom)
     updateMarkers();
     updateTrajectoryItems();
     updateGeofenceItems();
+    updateAlertMarkerItems();
     updateTiles();
 }
 
@@ -164,6 +165,12 @@ void OfflineMapWidget::setAlertTrackIds(const QSet<qint64> &track_ids)
 {
     alert_track_ids_ = track_ids;
     updateMarkers();
+}
+
+void OfflineMapWidget::setAlertMarkers(const QVector<TargetAlert> &alerts)
+{
+    alert_markers_ = alerts;
+    updateAlertMarkerItems();
 }
 
 void OfflineMapWidget::mousePressEvent(QMouseEvent *event)
@@ -544,6 +551,63 @@ void OfflineMapWidget::updateGeofenceItems()
             handle->setData(kGeofenceHandleDataRole, handle_index);
             geofence_handle_items_.append(handle);
         }
+    }
+}
+
+void OfflineMapWidget::updateAlertMarkerItems()
+{
+    QSet<qint64> next_alert_ids;
+    for (const TargetAlert &alert : std::as_const(alert_markers_))
+    {
+        next_alert_ids.insert(alert.id);
+    }
+    QMutableHashIterator<qint64, QGraphicsEllipseItem *> marker_iterator(alert_marker_items_);
+    while (marker_iterator.hasNext())
+    {
+        marker_iterator.next();
+        if (next_alert_ids.contains(marker_iterator.key()))
+        {
+            continue;
+        }
+        map_scene_->removeItem(marker_iterator.value());
+        delete marker_iterator.value();
+        marker_iterator.remove();
+    }
+
+    for (const TargetAlert &alert : std::as_const(alert_markers_))
+    {
+        const QPointF position_px = WebMercator::geoToGlobalPixel(alert.position, zoom_);
+        QGraphicsEllipseItem *marker = alert_marker_items_.value(alert.id, nullptr);
+        if (marker == nullptr)
+        {
+            marker = map_scene_->addEllipse(position_px.x() - 6.0, position_px.y() - 6.0, 12.0, 12.0,
+                                            QPen(QColor(QStringLiteral("#cf1322")), 3.0),
+                                            QBrush(QColor(207, 19, 34, 80)));
+            alert_marker_items_.insert(alert.id, marker);
+        }
+        else
+        {
+            marker->setRect(position_px.x() - 6.0, position_px.y() - 6.0, 12.0, 12.0);
+        }
+        marker->setZValue(19.0);
+        const QString acknowledged_at =
+            alert.acknowledged_at.has_value()
+                ? alert.acknowledged_at->toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                : QStringLiteral("--");
+        marker->setToolTip(
+            tr("告警：%1\n等级：%2\n规则：%3\n围栏：%4\n航迹 ID：%5\n类别：%6\n"
+               "坐标：%7, %8\n速度：%9 m/s\n距离：%10 m\n发生时间：%11\n"
+               "确认状态：%12\n确认时间：%13\n确认人：%14\n处理备注：%15")
+                .arg(alert.description, alertSeverityDisplayName(alert.severity), alert.rule_name, alert.geofence_name)
+                .arg(alert.track_id)
+                .arg(targetTypeDisplayName(alert.target_type))
+                .arg(alert.position.latitude, 0, 'f', 7)
+                .arg(alert.position.longitude, 0, 'f', 7)
+                .arg(optionalMeasurement(alert.velocity_mps), optionalMeasurement(alert.distance_m))
+                .arg(alert.occurred_at.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")))
+                .arg(alert.acknowledged ? tr("已确认") : tr("未确认"), acknowledged_at,
+                     alert.acknowledged_by.isEmpty() ? QStringLiteral("--") : alert.acknowledged_by,
+                     alert.handling_note.isEmpty() ? QStringLiteral("--") : alert.handling_note));
     }
 }
 

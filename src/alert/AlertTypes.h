@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <QDateTime>
 #include <QMetaType>
 #include <QString>
@@ -43,6 +45,37 @@ struct TargetAlert {
     std::optional<double> velocity_mps;
     std::optional<double> distance_m;
     QString description;
+    bool acknowledged = false;
+    std::optional<QDateTime> acknowledged_at;
+    QString acknowledged_by;
+    QString handling_note;
+};
+
+struct AlertQuery {
+    std::optional<QDateTime> start_time;
+    std::optional<QDateTime> end_time;
+    std::optional<AlertSeverity> severity;
+    std::optional<qint64> rule_id;
+    std::optional<qint64> geofence_id;
+    std::optional<qint64> track_id;
+    std::optional<TargetType> target_type;
+    std::optional<bool> acknowledged;
+};
+
+struct AlertQueryResult {
+    AlertQuery query;
+    QVector<TargetAlert> alerts;
+    int unacknowledged_count = 0;
+};
+
+struct AlertAcknowledgementRequest {
+    QVector<qint64> alert_ids;
+    QString handling_note;
+};
+
+struct AlertExportRequest {
+    AlertQuery query;
+    QString output_path;
 };
 
 QString alertRuleTypeDisplayName(AlertRuleType type);
@@ -53,4 +86,9 @@ QString validateAlertRule(const AlertRule &rule);
 
 Q_DECLARE_METATYPE(utms::AlertRule)
 Q_DECLARE_METATYPE(utms::TargetAlert)
+Q_DECLARE_METATYPE(utms::AlertQuery)
+Q_DECLARE_METATYPE(utms::AlertQueryResult)
+Q_DECLARE_METATYPE(utms::AlertAcknowledgementRequest)
+Q_DECLARE_METATYPE(utms::AlertExportRequest)
 Q_DECLARE_METATYPE(QVector<utms::AlertRule>)
+Q_DECLARE_METATYPE(QVector<utms::TargetAlert>)

@@ -43,6 +43,8 @@ class MapPanel : public QWidget
     void setTrajectoryDuration(RealtimeTrajectoryDuration duration);
     void setShowAllTrajectories(bool show_all_trajectories);
     void setGeofences(const QVector<Geofence> &geofences);
+    void setAlertMarkers(const QVector<TargetAlert> &alerts);
+    void clearAlertMarkers();
     bool setEditableGeofenceId(std::optional<qint64> geofence_id);
     void discardPendingGeofenceEdits();
     bool setSelectedTrackId(std::optional<qint64> track_id);
@@ -50,6 +52,7 @@ class MapPanel : public QWidget
     bool selectTarget(qint64 track_id, bool center_on_target);
     bool locateRadar();
     bool locateGeofence(qint64 geofence_id);
+    bool locateAlert(const TargetAlert &alert);
     bool flashAlertTarget(qint64 track_id, int duration_ms = 3'000);
     bool flashAlertTargets(const QVector<qint64> &track_ids, int duration_ms = 3'000);
 
@@ -63,6 +66,7 @@ class MapPanel : public QWidget
     std::optional<HistoryReplayTrajectory> replayTrajectory() const;
     QVector<RealtimeTrajectory> realtimeTrajectories(const QDateTime &now) const;
     const QVector<Geofence> &geofences() const;
+    const QVector<TargetAlert> &alertMarkers() const;
 
   signals:
     void targetClicked(qint64 track_id);
@@ -79,6 +83,7 @@ class MapPanel : public QWidget
     void applyViewToActiveMap();
     void renderDisplayFrame(const RadarFrame &frame);
     void renderTrajectories(const QDateTime &now);
+    void refreshAlertMarkers();
     QVector<RealtimeTrajectory> replayTrajectories() const;
     void synchronizeActiveMap();
 
@@ -94,6 +99,9 @@ class MapPanel : public QWidget
     std::optional<HistoryReplayTrajectory> replay_trajectory_;
     QVector<Geofence> geofences_;
     QVector<Geofence> confirmed_geofences_;
+    QVector<TargetAlert> alert_markers_;
+    QVector<TargetAlert> replay_alert_markers_;
+    std::optional<TargetAlert> located_alert_;
     QHash<qint64, Geofence> pending_geofence_edits_;
     std::optional<qint64> editable_geofence_id_;
     QSet<qint64> alert_track_ids_;

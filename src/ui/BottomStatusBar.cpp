@@ -32,9 +32,12 @@ BottomStatusBar::BottomStatusBar(QWidget *parent) : QWidget(parent)
     }
 
     layout->addStretch();
+    alert_count_label_ = new QLabel(this);
     display_mode_label_ = new QLabel(this);
     udp_status_label_ = new QLabel(this);
     frame_rate_label_ = new QLabel(this);
+    layout->addWidget(alert_count_label_);
+    layout->addWidget(new QLabel(QStringLiteral("|"), this));
     layout->addWidget(display_mode_label_);
     layout->addWidget(new QLabel(QStringLiteral("|"), this));
     layout->addWidget(udp_status_label_);
@@ -46,6 +49,7 @@ BottomStatusBar::BottomStatusBar(QWidget *parent) : QWidget(parent)
     connect(frame_rate_timer_, &QTimer::timeout, this, [this]() { updateSimulatedFrameRate(); });
     frame_rate_timer_->start();
     updateStatistics(TargetStatistics{});
+    setUnacknowledgedAlertCount(0);
     setReplayState(false, false);
     setUdpStatus(UdpStatus::kStopped);
     updateSimulatedFrameRate();
@@ -61,10 +65,17 @@ void BottomStatusBar::updateStatistics(const TargetStatistics &statistics)
     }
 }
 
+void BottomStatusBar::setUnacknowledgedAlertCount(int count)
+{
+    const int safe_count = qMax(0, count);
+    alert_count_label_->setText(tr("未确认告警 %1").arg(safe_count));
+    alert_count_label_->setStyleSheet(QStringLiteral("QLabel { color: %1; font-weight: 700; }")
+                                          .arg(safe_count > 0 ? QStringLiteral("#cf1322") : QStringLiteral("#555555")));
+}
+
 void BottomStatusBar::setReplayState(bool replay_mode, bool playing)
 {
-    if (!replay_mode)
-    {
+    if (!replay_mode) {
         display_mode_label_->setText(tr("实时模式"));
         display_mode_label_->setStyleSheet(QStringLiteral("QLabel { color: #208a4b; font-weight: 700; }"));
         return;

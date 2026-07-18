@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include <QFile>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -13,6 +14,7 @@ class AlertPersistenceTest : public QObject {
     private slots:
     void rulesAndTriggeredAlertsPersistAcrossReopen();
     void phase23AlertSchemaMigratesWithoutLosingRules();
+    void alertsCanBeFilteredExportedAndAcknowledgedWithoutDeletingFacts();
 };
 
 void AlertPersistenceTest::rulesAndTriggeredAlertsPersistAcrossReopen() {
@@ -176,6 +178,115 @@ void AlertPersistenceTest::phase23AlertSchemaMigratesWithoutLosingRules() {
     alert.velocity_mps = 15.0;
     alert.description = QStringLiteral("目标 42 围栏内超速");
     QVERIFY2(store.appendTargetAlert(alert, &error).has_value(), qPrintable(error));
+}
+
+void AlertPersistenceTest::alertsCanBeFilteredExportedAndAcknowledgedWithoutDeletingFacts() {
+    QTemporaryDir temporary_directory;
+    QVERIFY(temporary_directory.isValid());
+    const QString database_path = temporary_directory.filePath(QStringLiteral("history.sqlite"));
+    const QString output_path = temporary_directory.filePath(QStringLiteral("alerts.csv"));
+    QString error;
+
+    utms::HistoryStore store(database_path);
+    QVERIFY2(store.initialize(&error), qPrintable(error));
+
+    utms::TargetAlert first_alert;
+    first_alert.occurred_at = QDateTime::fromMSecsSinceEpoch(10'000, QTimeZone::UTC);
+    first_alert.rule_id = 11;
+    first_alert.rule_name = QStringLiteral("车辆进入");
+    first_alert.rule_type = utms::AlertRuleType::kStableEntry;
+    first_alert.severity = utms::AlertSeverity::kWarning;
+    first_alert.geofence_id = 7;
+    first_alert.geofence_name = QStringLiteral("重点区域");
+    first_alert.track_id = 42;
+    first_alert.target_type = utms::TargetType::kCar;
+    first_alert.position = {25.31, 110.41};
+    first_alert.velocity_mps = 8.5;
+    first_alert.description = QStringLiteral("目标 42 稳定进入围栏");
+    const std::optional<qint64> first_id = store.appendTargetAlert(first_alert, &error);
+    QVERIFY2(first_id.has_value(), qPrintable(error));
+
+    utms::TargetAlert second_alert = first_alert;
+    second_alert.occurred_at = QDateTime::fromMSecsSinceEpoch(20'000, QTimeZone::UTC);
+    second_alert.rule_id = 12;
+    second_alert.rule_name = QStringLiteral("行人离开");
+    second_alert.rule_type = utms::AlertRuleType::kStableExit;
+    second_alert.severity = utms::AlertSeverity::kSevere;
+    second_alert.geofence_id = 8;
+    second_alert.geofence_name = QStringLiteral("校园边界");
+    second_alert.track_id = 99;
+    second_alert.target_type = utms::TargetType::kPedestrian;
+    second_alert.position = {25.32, 110.42};
+    second_alert.velocity_mps.reset();
+    second_alert.description = QStringLiteral("目标 99 稳定离开围栏");
+    const std::optional<qint64> second_id = store.appendTargetAlert(second_alert, &error);
+    QVERIFY2(second_id.has_value(), qPrintable(error));
+
+    const std::optional<qint64> session_id =
+        store.startSession(QDateTime::fromMSecsSinceEpoch(0, QTimeZone::UTC), &error);
+    QVERIFY2(session_id.has_value(), qPrintable(error));
+    utms::RadarFrame stored_frame;
+    stored_frame.received_at = first_alert.occurred_at;
+    stored_frame.sender_timestamp_seconds = 1.0;
+    stored_frame.sequence = 1;
+    stored_frame.tracks = {{first_alert.track_id, first_alert.target_type, first_alert.position}};
+    QVERIFY2(store.appendFrame(session_id.value(), stored_frame, &error), qPrintable(error));
+    utms::HistoryQuery history_query;
+    history_query.session_id = session_id;
+    history_query.start_time = QDateTime::fromMSecsSinceEpoch(900, QTimeZone::UTC);
+    history_query.end_time = QDateTime::fromMSecsSinceEpoch(1'100, QTimeZone::UTC);
+    const std::optional<utms::HistoryQueryResult> history_result = store.queryHistory(history_query, &error);
+    QVERIFY2(history_result.has_value(), qPrintable(error));
+    QCOMPARE(history_result->alerts.size(), 1);
+    QCOMPARE(history_result->alerts.constFirst().id, first_id.value());
+
+    utms::AlertQuery filter;
+    filter.start_time = QDateTime::fromMSecsSinceEpoch(15'000, QTimeZone::UTC);
+    filter.end_time = QDateTime::fromMSecsSinceEpoch(25'000, QTimeZone::UTC);
+    filter.severity = utms::AlertSeverity::kSevere;
+    filter.rule_id = 12;
+    filter.geofence_id = 8;
+    filter.track_id = 99;
+    filter.target_type = utms::TargetType::kPedestrian;
+    filter.acknowledged = false;
+    const std::optional<utms::AlertQueryResult> filtered = store.queryTargetAlerts(filter, &error);
+    QVERIFY2(filtered.has_value(), qPrintable(error));
+    QCOMPARE(filtered->alerts.size(), 1);
+    QCOMPARE(filtered->alerts.constFirst().id, second_id.value());
+    QCOMPARE(filtered->unacknowledged_count, 2);
+
+    const QDateTime acknowledged_at = QDateTime::fromMSecsSinceEpoch(30'000, QTimeZone::UTC);
+    QVERIFY2(store.acknowledgeTargetAlerts({second_id.value()}, QStringLiteral("已电话核实"), acknowledged_at,
+                                           QStringLiteral("root"), &error),
+             qPrintable(error));
+    const std::optional<utms::TargetAlert> acknowledged = store.loadTargetAlert(second_id.value(), &error);
+    QVERIFY2(acknowledged.has_value(), qPrintable(error));
+    QVERIFY(acknowledged->acknowledged);
+    QCOMPARE(acknowledged->acknowledged_at, std::optional<QDateTime>(acknowledged_at));
+    QCOMPARE(acknowledged->acknowledged_by, QStringLiteral("root"));
+    QCOMPARE(acknowledged->handling_note, QStringLiteral("已电话核实"));
+
+    QVERIFY2(store.acknowledgeTargetAlerts({first_id.value(), second_id.value()}, QStringLiteral("批量复核"),
+                                           acknowledged_at.addSecs(1), QStringLiteral("root"), &error),
+             qPrintable(error));
+    const std::optional<utms::AlertQueryResult> all_alerts = store.queryTargetAlerts({}, &error);
+    QVERIFY2(all_alerts.has_value(), qPrintable(error));
+    QCOMPARE(all_alerts->alerts.size(), 2);
+    QCOMPARE(all_alerts->unacknowledged_count, 0);
+
+    utms::AlertQuery export_filter;
+    export_filter.geofence_id = 8;
+    const std::optional<int> exported_count = store.exportTargetAlertsCsv(export_filter, output_path, &error);
+    QVERIFY2(exported_count.has_value(), qPrintable(error));
+    QCOMPARE(exported_count.value(), 1);
+    QFile output_file(output_path);
+    QVERIFY(output_file.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString csv = QString::fromUtf8(output_file.readAll());
+    QVERIFY(csv.contains(QStringLiteral("发生时间,等级,规则,围栏,航迹 ID,类别")));
+    QVERIFY(csv.contains(QStringLiteral("行人离开")));
+    QVERIFY(csv.contains(QStringLiteral("校园边界")));
+    QVERIFY(csv.contains(QStringLiteral("root")));
+    QVERIFY(!csv.contains(QStringLiteral("车辆进入")));
 }
 
 QTEST_GUILESS_MAIN(AlertPersistenceTest)

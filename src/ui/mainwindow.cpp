@@ -31,6 +31,7 @@
 #include "map/OnlineMapState.h"
 #include "media/RtspController.h"
 #include "network/UdpReceiver.h"
+#include "ui/AlertCenterWidget.h"
 #include "ui/AlertNotificationWidget.h"
 #include "ui/AlertRuleManagerWidget.h"
 #include "ui/BottomStatusBar.h"
@@ -193,9 +194,13 @@ void MainWindow::handleHistoryAvailabilityChanged(bool available, const QString 
     history_query_widget_->showStatus(detail, !available);
     geofence_manager_widget_->setAvailable(available);
     alert_rule_manager_widget_->setAvailable(available);
+    alert_center_widget_->setAvailable(available);
     if (!available) {
         geofence_manager_widget_->showStatus(detail, true);
         alert_rule_manager_widget_->showStatus(detail, true);
+        alert_center_widget_->showStatus(detail, true);
+    } else {
+        emit queryTargetAlertsRequested(alert_center_widget_->currentQuery());
     }
 }
 
@@ -230,6 +235,7 @@ void MainWindow::handleGeofencesLoaded(const QVector<utms::Geofence> &geofences)
     map_panel_->setGeofences(geofences);
     geofence_manager_widget_->setGeofences(map_panel_->geofences());
     alert_rule_manager_widget_->setGeofences(map_panel_->geofences());
+    alert_center_widget_->setGeofences(map_panel_->geofences());
 }
 
 void MainWindow::handleGeofenceError(const QString &message) {
@@ -240,10 +246,29 @@ void MainWindow::handleGeofenceError(const QString &message) {
 
 void MainWindow::handleAlertRulesLoaded(const QVector<utms::AlertRule> &rules) {
     alert_rule_manager_widget_->setRules(rules);
+    alert_center_widget_->setRules(rules);
 }
 
 void MainWindow::handleAlertRuleError(const QString &message) {
     alert_rule_manager_widget_->showStatus(tr("告警规则错误：%1").arg(message), true);
+}
+
+void MainWindow::handleTargetAlertsLoaded(const utms::AlertQueryResult &result) {
+    alert_center_widget_->applyQueryResult(result);
+    bottom_status_bar_->setUnacknowledgedAlertCount(result.unacknowledged_count);
+}
+
+void MainWindow::handleTargetAlertsAcknowledged(int acknowledged_count) {
+    alert_center_widget_->showStatus(tr("已确认 %1 条告警").arg(acknowledged_count), false);
+    emit queryTargetAlertsRequested(alert_center_widget_->currentQuery());
+}
+
+void MainWindow::handleTargetAlertExportCompleted(const QString &output_path, int record_count) {
+    alert_center_widget_->showExportCompleted(output_path, record_count);
+}
+
+void MainWindow::handleTargetAlertError(const QString &message) {
+    alert_center_widget_->showStatus(tr("告警中心错误：%1").arg(message), true);
 }
 
 void MainWindow::handleTargetAlert(const utms::TargetAlert &alert) {
@@ -514,6 +539,27 @@ void MainWindow::setupUi() {
     connect(alert_rule_manager_widget_, &utms::AlertRuleManagerWidget::deleteRequested, this,
             &MainWindow::deleteAlertRuleRequested);
 
+    alert_center_widget_ = new utms::AlertCenterWidget(configuration_tabs);
+    configuration_tabs->addTab(alert_center_widget_, tr("告警中心"));
+    connect(alert_center_widget_, &utms::AlertCenterWidget::queryRequested, this,
+            &MainWindow::queryTargetAlertsRequested);
+    connect(alert_center_widget_, &utms::AlertCenterWidget::acknowledgeRequested, this,
+            &MainWindow::acknowledgeTargetAlertsRequested);
+    connect(alert_center_widget_, &utms::AlertCenterWidget::exportRequested, this,
+            &MainWindow::exportTargetAlertsRequested);
+    connect(alert_center_widget_, &utms::AlertCenterWidget::ruleManagementRequested, this,
+            [configuration_tabs, this]() { configuration_tabs->setCurrentWidget(alert_rule_manager_widget_); });
+    connect(alert_center_widget_, &utms::AlertCenterWidget::geofenceManagementRequested, this,
+            [configuration_tabs, this]() { configuration_tabs->setCurrentWidget(geofence_manager_widget_); });
+    connect(alert_center_widget_, &utms::AlertCenterWidget::alertSelected, this,
+            [this](const utms::TargetAlert &alert) {
+                if (!map_panel_->locateAlert(alert)) {
+                    alert_center_widget_->showStatus(tr("告警位置无效，无法定位"), true);
+                    return;
+                }
+                track_table_->selectTrackById(alert.track_id);
+            });
+
     data_splitter->addWidget(track_table_);
     data_splitter->addWidget(configuration_tabs);
     data_splitter->setStretchFactor(0, 55);
@@ -629,6 +675,8 @@ void MainWindow::setupPlaybackController() {
             &utms::MapPanel::setReplayTrajectory);
     connect(playback_controller_, &utms::HistoryPlaybackController::selectedTrajectoryCleared, map_panel_,
             &utms::MapPanel::clearReplayTrajectory);
+    connect(playback_controller_, &utms::HistoryPlaybackController::alertMarkersChanged, map_panel_,
+            &utms::MapPanel::setAlertMarkers);
 }
 
 void MainWindow::selectReplayTrack(qint64 track_id) {
@@ -682,6 +730,12 @@ void MainWindow::setupHistoryController() {
             &utms::HistoryController::setAlertRuleEnabled);
     connect(this, &MainWindow::deleteAlertRuleRequested, history_controller_,
             &utms::HistoryController::deleteAlertRule);
+    connect(this, &MainWindow::queryTargetAlertsRequested, history_controller_,
+            &utms::HistoryController::queryTargetAlerts);
+    connect(this, &MainWindow::acknowledgeTargetAlertsRequested, history_controller_,
+            &utms::HistoryController::acknowledgeTargetAlerts);
+    connect(this, &MainWindow::exportTargetAlertsRequested, history_controller_,
+            &utms::HistoryController::exportTargetAlertsCsv);
     connect(this, &MainWindow::shutdownHistoryWorkerRequested, history_controller_, &utms::HistoryController::shutdown);
     connect(history_controller_, &utms::HistoryController::configurationLoaded, this,
             &MainWindow::handleHistoryConfigurationLoaded);
@@ -708,6 +762,16 @@ void MainWindow::setupHistoryController() {
                 qWarning() << "MainWindow: target alert persistence failed" << message;
                 alert_rule_manager_widget_->showStatus(tr("告警已呈现，但保存失败：%1").arg(message), true);
             });
+    connect(history_controller_, &utms::HistoryController::targetAlertPersisted, this,
+            [this](qint64) { emit queryTargetAlertsRequested(alert_center_widget_->currentQuery()); });
+    connect(history_controller_, &utms::HistoryController::targetAlertsLoaded, this,
+            &MainWindow::handleTargetAlertsLoaded);
+    connect(history_controller_, &utms::HistoryController::targetAlertsAcknowledged, this,
+            &MainWindow::handleTargetAlertsAcknowledged);
+    connect(history_controller_, &utms::HistoryController::targetAlertExportCompleted, this,
+            &MainWindow::handleTargetAlertExportCompleted);
+    connect(history_controller_, &utms::HistoryController::targetAlertErrorOccurred, this,
+            &MainWindow::handleTargetAlertError);
     connect(history_controller_, &utms::HistoryController::sessionDeleted, this, [this](qint64 session_id) {
         history_query_widget_->showStatus(tr("历史会话 #%1 已删除").arg(session_id), false);
     });
@@ -758,7 +822,8 @@ void MainWindow::setupAlertWorker() {
     if (history_controller_ != nullptr) {
         if (!QMetaObject::invokeMethod(history_controller_, &utms::HistoryController::refreshGeofences,
                                        Qt::QueuedConnection)) {
-            qWarning() << "MainWindow: failed to queue the initial geofence refresh for the alert worker";
+            qWarning() << "MainWindow: failed to queue the initial geofence refresh "
+                          "for the alert worker";
         }
         if (!QMetaObject::invokeMethod(history_controller_, &utms::HistoryController::refreshAlertRules,
                                        Qt::QueuedConnection)) {

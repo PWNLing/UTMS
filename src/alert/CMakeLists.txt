@@ -1,6 +1,8 @@
 set(PROJECT_ALERT_TARGET "${PROJECT_NAME}_alert")
 
 add_library(${PROJECT_ALERT_TARGET} STATIC
+    AlertCsvExporter.cpp
+    AlertCsvExporter.h
     AlertEngine.cpp
     AlertEngine.h
     AlertTypes.cpp

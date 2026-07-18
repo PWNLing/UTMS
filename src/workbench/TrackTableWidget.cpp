@@ -204,6 +204,7 @@ bool TrackTableWidget::selectTrackById(qint64 track_id)
 {
     if (!sourceContainsTrack(track_id))
     {
+        clearTargetSelection();
         return false;
     }
 
@@ -223,6 +224,20 @@ bool TrackTableWidget::selectTrackById(qint64 track_id)
     table_view_->scrollTo(proxy_index, QAbstractItemView::PositionAtCenter);
     restoring_selection_ = false;
     return true;
+}
+
+void TrackTableWidget::clearTargetSelection()
+{
+    const bool had_selection = selected_track_id_.has_value() || table_view_->currentIndex().isValid();
+    restoring_selection_ = true;
+    selected_track_id_.reset();
+    table_view_->clearSelection();
+    table_view_->setCurrentIndex({});
+    restoring_selection_ = false;
+    if (had_selection)
+    {
+        emit targetSelectionCleared();
+    }
 }
 
 QModelIndex TrackTableWidget::proxyIndexForTrack(qint64 track_id) const
