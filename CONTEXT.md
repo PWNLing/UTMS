@@ -1,6 +1,6 @@
 # UTMS Radar Display Control
 
-UTMS is a single-context radar display control application. Its language covers the first-stage radar-display baseline and the delivered second-stage login, video, recording, and system-monitoring capabilities.
+UTMS is a single-context radar display control application. Its language covers the first-stage radar-display baseline and the delivered second-stage login, video, recording, and system-monitoring capabilities, plus the delivered third-stage realtime-trajectory, history-replay, geofence, and target-alert capabilities.
 
 ## Language
 
@@ -15,7 +15,7 @@ The delivered scope for one RTSP video stream, FFmpeg decoding, YOLO ONNX Runtim
 _Avoid_: First-stage video, radar-video association
 
 **Third-stage capabilities**:
-The planned scope for short-lived realtime trajectories, persisted radar-history query and replay, and geofence-driven target alerts. These capabilities extend accepted radar frames without changing current-frame snapshot semantics.
+The delivered scope for short-lived realtime trajectories, persisted radar-history query and replay, and geofence-driven target alerts. These capabilities extend accepted radar frames without changing current-frame snapshot semantics.
 _Avoid_: Video replay, radar-video association, multi-radar fusion
 
 **Login gate**:
