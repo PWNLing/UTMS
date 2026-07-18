@@ -1,8 +1,8 @@
-#include <QtTest>
-
 #include <cmath>
 #include <limits>
 #include <optional>
+
+#include <QtTest>
 
 #include "alert/AlertEngine.h"
 #include "alert/AlertWorker.h"
@@ -49,7 +49,7 @@ utms::RadarFrame makeFrame(qint64 time_ms, qint64 track_id, utms::TargetType typ
 class AlertEngineTest : public QObject {
     Q_OBJECT
 
-  private slots:
+    private slots:
     void stableEntryRequiresConfirmationAndHonorsCategoryScope();
     void entrySupportsAllEnabledGeofenceShapes();
     void stableExitRequiresInsideBaselineMarginAndConfirmation();

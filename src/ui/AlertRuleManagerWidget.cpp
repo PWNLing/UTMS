@@ -61,7 +61,7 @@ QString confirmationText(const AlertRule &rule) {
 }
 
 class AlertRuleEditDialog : public QDialog {
-  public:
+    public:
     AlertRuleEditDialog(const QVector<Geofence> &geofences, const std::optional<AlertRule> &existing_rule,
                         QWidget *parent)
         : QDialog(parent), existing_id_(existing_rule.has_value() ? existing_rule->id : 0) {
@@ -145,7 +145,7 @@ class AlertRuleEditDialog : public QDialog {
 
     AlertRule rule() const { return rule_; }
 
-  protected:
+    protected:
     void accept() override {
         AlertRule candidate;
         candidate.id = existing_id_;
@@ -181,7 +181,7 @@ class AlertRuleEditDialog : public QDialog {
         QDialog::accept();
     }
 
-  private:
+    private:
     void applyRule(const AlertRule &rule) {
         name_line_edit_->setText(rule.name);
         type_combo_box_->setCurrentIndex(type_combo_box_->findData(static_cast<int>(rule.type)));

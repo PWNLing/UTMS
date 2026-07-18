@@ -10,7 +10,7 @@
 class AlertPersistenceTest : public QObject {
     Q_OBJECT
 
-  private slots:
+    private slots:
     void rulesAndTriggeredAlertsPersistAcrossReopen();
     void phase23AlertSchemaMigratesWithoutLosingRules();
 };

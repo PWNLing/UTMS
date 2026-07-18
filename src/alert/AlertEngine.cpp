@@ -226,8 +226,8 @@ QVector<TargetAlert> AlertEngine::evaluateFrame(const RadarFrame &frame) {
                     state.candidate_since = frame.received_at;
                 }
                 if (!state.triggered && state.candidate_since->msecsTo(frame.received_at) >= rule.confirmation_ms) {
-                    state.triggered = appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track,
-                                                                   frame.received_at, &alerts);
+                    state.triggered =
+                        appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track, frame.received_at, alerts);
                 }
                 continue;
             }
@@ -242,8 +242,8 @@ QVector<TargetAlert> AlertEngine::evaluateFrame(const RadarFrame &frame) {
                     state.candidate_since = frame.received_at;
                 }
                 if (!state.triggered && state.candidate_since->msecsTo(frame.received_at) >= rule.dwell_threshold_ms) {
-                    state.triggered = appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track,
-                                                                   frame.received_at, &alerts);
+                    state.triggered =
+                        appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track, frame.received_at, alerts);
                 }
                 continue;
             }
@@ -261,8 +261,8 @@ QVector<TargetAlert> AlertEngine::evaluateFrame(const RadarFrame &frame) {
                     state.candidate_since = frame.received_at;
                 }
                 if (!state.triggered && state.candidate_since->msecsTo(frame.received_at) >= rule.confirmation_ms) {
-                    state.triggered = appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track,
-                                                                   frame.received_at, &alerts);
+                    state.triggered =
+                        appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track, frame.received_at, alerts);
                 }
                 continue;
             }
@@ -288,7 +288,7 @@ QVector<TargetAlert> AlertEngine::evaluateFrame(const RadarFrame &frame) {
                 state.candidate_since = frame.received_at;
             }
             if (state.candidate_since->msecsTo(frame.received_at) >= rule.confirmation_ms) {
-                if (appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track, frame.received_at, &alerts)) {
+                if (appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track, frame.received_at, alerts)) {
                     state.inside_confirmed = false;
                     state.triggered = true;
                 }
@@ -387,7 +387,7 @@ TargetAlert AlertEngine::createAlert(const AlertRule &rule, const Geofence &geof
 }
 
 bool AlertEngine::appendAlertIfCooldownElapsed(const AlertRule &rule, const Geofence &geofence, const TrackData &track,
-                                               const QDateTime &occurred_at, QVector<TargetAlert> *alerts) {
+                                               const QDateTime &occurred_at, QVector<TargetAlert> &alerts) {
     const auto rule_alerts = last_alerts_by_rule_.constFind(rule.id);
     if (rule_alerts != last_alerts_by_rule_.cend()) {
         const auto last_alert = rule_alerts->constFind(track.track_id);
@@ -396,7 +396,7 @@ bool AlertEngine::appendAlertIfCooldownElapsed(const AlertRule &rule, const Geof
             return false;
         }
     }
-    alerts->append(createAlert(rule, geofence, track, occurred_at));
+    alerts.append(createAlert(rule, geofence, track, occurred_at));
     last_alerts_by_rule_[rule.id].insert(track.track_id, occurred_at);
     return true;
 }

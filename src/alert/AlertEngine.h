@@ -32,7 +32,7 @@ class AlertEngine {
     static TargetAlert createAlert(const AlertRule &rule, const Geofence &geofence, const TrackData &track,
                                    const QDateTime &occurred_at);
     bool appendAlertIfCooldownElapsed(const AlertRule &rule, const Geofence &geofence, const TrackData &track,
-                                      const QDateTime &occurred_at, QVector<TargetAlert> *alerts);
+                                      const QDateTime &occurred_at, QVector<TargetAlert> &alerts);
 
     QHash<qint64, Geofence> geofences_by_id_;
     QVector<AlertRule> rules_;

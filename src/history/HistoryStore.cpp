@@ -4,6 +4,7 @@
 #include <limits>
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -49,6 +50,19 @@ bool executeSchemaStatement(QSqlDatabase &database, const QString &statement, QS
         error_message,
         storeText(QT_TRANSLATE_NOOP("HistoryStore", "执行历史数据库结构语句失败：%1")).arg(query.lastError().text()));
     return false;
+}
+
+void restoreForeignKeyEnforcement(QSqlDatabase &database, QString *error_message) {
+    QString restore_error;
+    if (executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), &restore_error)) {
+        return;
+    }
+    qWarning() << "HistoryStore:" << restore_error;
+    if (error_message != nullptr) {
+        *error_message =
+            error_message->isEmpty() ? restore_error : storeText(QT_TRANSLATE_NOOP("HistoryStore", "%1；%2"))
+                                                          .arg(*error_message, restore_error);
+    }
 }
 
 std::optional<int> samplingRateValue(HistorySamplingRate sampling_rate) {
@@ -307,13 +321,15 @@ bool migratePhase23AlertSchema(QSqlDatabase &database, QString *error_message) {
         return true;
     }
 
+    // SQLite 无法直接放宽既有 CHECK 约束，因此在一个事务内重建两张告警表并原样复制数据。
+    // 外键开关只能在事务外切换；任一失败路径都会先回滚，再尝试恢复外键检查并保留完整错误上下文。
     if (!executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = OFF"), error_message)) {
         return false;
     }
     if (!database.transaction()) {
         setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "开始告警数据库升级事务失败：%1"))
                                     .arg(database.lastError().text()));
-        executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), nullptr);
+        restoreForeignKeyEnforcement(database, error_message);
         return false;
     }
 
@@ -358,7 +374,7 @@ bool migratePhase23AlertSchema(QSqlDatabase &database, QString *error_message) {
             const QString migration_error = storeText(QT_TRANSLATE_NOOP("HistoryStore", "升级告警数据库结构失败：%1"))
                                                 .arg(query.lastError().text());
             setTransactionError(database, error_message, migration_error);
-            executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), nullptr);
+            restoreForeignKeyEnforcement(database, error_message);
             return false;
         }
     }
@@ -366,7 +382,7 @@ bool migratePhase23AlertSchema(QSqlDatabase &database, QString *error_message) {
         setTransactionError(database, error_message,
                             storeText(QT_TRANSLATE_NOOP("HistoryStore", "提交告警数据库升级失败：%1"))
                                 .arg(database.lastError().text()));
-        executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), nullptr);
+        restoreForeignKeyEnforcement(database, error_message);
         return false;
     }
     return executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), error_message);
