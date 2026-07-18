@@ -108,7 +108,7 @@ std::optional<QVector<TargetType>> targetTypesFromMask(int mask) {
 
 bool isValidAlertRuleTypeValue(int value) {
     return value >= static_cast<int>(AlertRuleType::kStableEntry) &&
-           value <= static_cast<int>(AlertRuleType::kStableExit);
+           value <= static_cast<int>(AlertRuleType::kGeofenceSpeeding);
 }
 
 bool isValidAlertSeverityValue(int value) {
@@ -230,6 +230,148 @@ QByteArray geometryJson(const Geofence &geofence) {
     return QJsonDocument(geometryObject(geofence)).toJson(QJsonDocument::Compact);
 }
 
+QString createAlertRulesTableStatement() {
+    return QStringLiteral("CREATE TABLE IF NOT EXISTS alert_rules ("
+                          "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                          "name TEXT NOT NULL,"
+                          "rule_type INTEGER NOT NULL CHECK(rule_type BETWEEN 0 AND 3),"
+                          "geofence_id INTEGER NOT NULL,"
+                          "target_type_mask INTEGER NOT NULL CHECK(target_type_mask BETWEEN 1 AND "
+                          "31),"
+                          "severity INTEGER NOT NULL CHECK(severity BETWEEN 0 AND 2),"
+                          "dwell_threshold_ms INTEGER NOT NULL DEFAULT 5000 CHECK("
+                          "dwell_threshold_ms BETWEEN 5000 AND 86400000),"
+                          "speed_threshold_mps REAL NOT NULL DEFAULT 1.0 CHECK(speed_threshold_mps "
+                          "> 0),"
+                          "confirmation_ms INTEGER NOT NULL CHECK(confirmation_ms BETWEEN 0 AND "
+                          "60000),"
+                          "cooldown_ms INTEGER NOT NULL DEFAULT 30000 CHECK(cooldown_ms BETWEEN 0 "
+                          "AND 86400000),"
+                          "enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),"
+                          "note TEXT NOT NULL DEFAULT '',"
+                          "created_at_ms INTEGER NOT NULL,"
+                          "updated_at_ms INTEGER NOT NULL,"
+                          "FOREIGN KEY(geofence_id) REFERENCES geofences(id) ON DELETE CASCADE"
+                          ")");
+}
+
+QString createTargetAlertsTableStatement() {
+    return QStringLiteral("CREATE TABLE IF NOT EXISTS target_alerts ("
+                          "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                          "occurred_at_ms INTEGER NOT NULL,"
+                          "rule_id INTEGER NOT NULL,"
+                          "rule_name TEXT NOT NULL,"
+                          "rule_type INTEGER NOT NULL CHECK(rule_type BETWEEN 0 AND 3),"
+                          "severity INTEGER NOT NULL CHECK(severity BETWEEN 0 AND 2),"
+                          "geofence_id INTEGER NOT NULL,"
+                          "geofence_name TEXT NOT NULL,"
+                          "track_id INTEGER NOT NULL,"
+                          "target_type INTEGER NOT NULL CHECK(target_type BETWEEN 0 AND 4),"
+                          "latitude REAL NOT NULL,"
+                          "longitude REAL NOT NULL,"
+                          "velocity_mps REAL,"
+                          "distance_m REAL,"
+                          "description TEXT NOT NULL,"
+                          "acknowledged INTEGER NOT NULL DEFAULT 0 CHECK(acknowledged IN (0, 1)),"
+                          "acknowledged_at_ms INTEGER,"
+                          "acknowledged_by TEXT,"
+                          "handling_note TEXT NOT NULL DEFAULT ''"
+                          ")");
+}
+
+bool tableHasColumn(QSqlDatabase &database, const QString &table_name, const QString &column_name,
+                    QString *error_message) {
+    QSqlQuery query(database);
+    if (!query.exec(QStringLiteral("PRAGMA table_info(%1)").arg(table_name))) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "检查历史数据库表 %1 失败：%2"))
+                                    .arg(table_name, query.lastError().text()));
+        return false;
+    }
+    while (query.next()) {
+        if (query.value(1).toString() == column_name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool migratePhase23AlertSchema(QSqlDatabase &database, QString *error_message) {
+    QString inspection_error;
+    const bool has_cooldown_column =
+        tableHasColumn(database, QStringLiteral("alert_rules"), QStringLiteral("cooldown_ms"), &inspection_error);
+    if (!inspection_error.isEmpty()) {
+        setError(error_message, inspection_error);
+        return false;
+    }
+    if (has_cooldown_column) {
+        return true;
+    }
+
+    if (!executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = OFF"), error_message)) {
+        return false;
+    }
+    if (!database.transaction()) {
+        setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "开始告警数据库升级事务失败：%1"))
+                                    .arg(database.lastError().text()));
+        executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), nullptr);
+        return false;
+    }
+
+    const QStringList migration_statements = {
+        QStringLiteral("ALTER TABLE alert_rules RENAME TO alert_rules_phase23"),
+        createAlertRulesTableStatement(),
+        QStringLiteral("INSERT INTO alert_rules("
+                       "id, name, rule_type, geofence_id, target_type_mask, severity, "
+                       "dwell_threshold_ms, speed_threshold_mps, confirmation_ms, "
+                       "cooldown_ms, "
+                       "enabled, note, created_at_ms, updated_at_ms) "
+                       "SELECT id, name, rule_type, geofence_id, target_type_mask, "
+                       "severity, "
+                       "5000, 1.0, confirmation_ms, 30000, enabled, note, created_at_ms, "
+                       "updated_at_ms "
+                       "FROM alert_rules_phase23"),
+        QStringLiteral("DROP TABLE alert_rules_phase23"),
+        QStringLiteral("CREATE INDEX idx_alert_rules_geofence ON alert_rules(geofence_id)"),
+        QStringLiteral("ALTER TABLE target_alerts RENAME TO target_alerts_phase23"),
+        createTargetAlertsTableStatement(),
+        QStringLiteral("INSERT INTO target_alerts("
+                       "id, occurred_at_ms, rule_id, rule_name, rule_type, "
+                       "severity, geofence_id, "
+                       "geofence_name, track_id, target_type, latitude, "
+                       "longitude, velocity_mps, distance_m, "
+                       "description, acknowledged, acknowledged_at_ms, "
+                       "acknowledged_by, handling_note) "
+                       "SELECT id, occurred_at_ms, rule_id, rule_name, "
+                       "rule_type, severity, geofence_id, "
+                       "geofence_name, track_id, target_type, latitude, "
+                       "longitude, velocity_mps, distance_m, "
+                       "description, acknowledged, acknowledged_at_ms, "
+                       "acknowledged_by, handling_note "
+                       "FROM target_alerts_phase23"),
+        QStringLiteral("DROP TABLE target_alerts_phase23"),
+        QStringLiteral("CREATE INDEX idx_target_alerts_time ON "
+                       "target_alerts(occurred_at_ms)")};
+
+    for (const QString &statement : migration_statements) {
+        QSqlQuery query(database);
+        if (!query.exec(statement)) {
+            const QString migration_error = storeText(QT_TRANSLATE_NOOP("HistoryStore", "升级告警数据库结构失败：%1"))
+                                                .arg(query.lastError().text());
+            setTransactionError(database, error_message, migration_error);
+            executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), nullptr);
+            return false;
+        }
+    }
+    if (!database.commit()) {
+        setTransactionError(database, error_message,
+                            storeText(QT_TRANSLATE_NOOP("HistoryStore", "提交告警数据库升级失败：%1"))
+                                .arg(database.lastError().text()));
+        executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), nullptr);
+        return false;
+    }
+    return executeSchemaStatement(database, QStringLiteral("PRAGMA foreign_keys = ON"), error_message);
+}
+
 } // namespace
 
 HistoryStore::HistoryStore(const QString &database_path)
@@ -345,57 +487,23 @@ bool HistoryStore::initialize(QString *error_message) {
                                                "updated_at_ms INTEGER NOT NULL"
                                                ")"),
                                 error_message) ||
-        !executeSchemaStatement(database,
-                                QStringLiteral("CREATE TABLE IF NOT EXISTS alert_rules ("
-                                               "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                                               "name TEXT NOT NULL,"
-                                               "rule_type INTEGER NOT NULL CHECK(rule_type BETWEEN 0 AND 1),"
-                                               "geofence_id INTEGER NOT NULL,"
-                                               "target_type_mask INTEGER NOT NULL CHECK(target_type_mask "
-                                               "BETWEEN 1 AND 31),"
-                                               "severity INTEGER NOT NULL CHECK(severity BETWEEN 0 AND 2),"
-                                               "confirmation_ms INTEGER NOT NULL CHECK(confirmation_ms BETWEEN "
-                                               "0 AND 60000),"
-                                               "enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),"
-                                               "note TEXT NOT NULL DEFAULT '',"
-                                               "created_at_ms INTEGER NOT NULL,"
-                                               "updated_at_ms INTEGER NOT NULL,"
-                                               "FOREIGN KEY(geofence_id) REFERENCES geofences(id) ON DELETE "
-                                               "CASCADE"
-                                               ")"),
-                                error_message) ||
+        !executeSchemaStatement(database, createAlertRulesTableStatement(), error_message) ||
         !executeSchemaStatement(database,
                                 QStringLiteral("CREATE INDEX IF NOT EXISTS idx_alert_rules_geofence "
                                                "ON alert_rules(geofence_id)"),
                                 error_message) ||
-        !executeSchemaStatement(database,
-                                QStringLiteral("CREATE TABLE IF NOT EXISTS target_alerts ("
-                                               "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                                               "occurred_at_ms INTEGER NOT NULL,"
-                                               "rule_id INTEGER NOT NULL,"
-                                               "rule_name TEXT NOT NULL,"
-                                               "rule_type INTEGER NOT NULL CHECK(rule_type BETWEEN 0 AND 1),"
-                                               "severity INTEGER NOT NULL CHECK(severity BETWEEN 0 AND 2),"
-                                               "geofence_id INTEGER NOT NULL,"
-                                               "geofence_name TEXT NOT NULL,"
-                                               "track_id INTEGER NOT NULL,"
-                                               "target_type INTEGER NOT NULL CHECK(target_type BETWEEN 0 AND 4),"
-                                               "latitude REAL NOT NULL,"
-                                               "longitude REAL NOT NULL,"
-                                               "velocity_mps REAL,"
-                                               "distance_m REAL,"
-                                               "description TEXT NOT NULL,"
-                                               "acknowledged INTEGER NOT NULL DEFAULT 0 CHECK(acknowledged IN "
-                                               "(0, 1)),"
-                                               "acknowledged_at_ms INTEGER,"
-                                               "acknowledged_by TEXT,"
-                                               "handling_note TEXT NOT NULL DEFAULT ''"
-                                               ")"),
-                                error_message) ||
+        !executeSchemaStatement(database, createTargetAlertsTableStatement(), error_message) ||
         !executeSchemaStatement(database,
                                 QStringLiteral("CREATE INDEX IF NOT EXISTS idx_target_alerts_time "
                                                "ON target_alerts(occurred_at_ms)"),
                                 error_message)) {
+        database.close();
+        database = QSqlDatabase();
+        QSqlDatabase::removeDatabase(connection_name_);
+        return false;
+    }
+
+    if (!migratePhase23AlertSchema(database, error_message)) {
         database.close();
         database = QSqlDatabase();
         QSqlDatabase::removeDatabase(connection_name_);
@@ -1225,8 +1333,9 @@ std::optional<QVector<AlertRule>> HistoryStore::loadAlertRules(QString *error_me
     QSqlDatabase database = QSqlDatabase::database(connection_name_);
     QSqlQuery query(database);
     if (!query.exec(QStringLiteral("SELECT id, name, rule_type, geofence_id, target_type_mask, "
-                                   "severity, "
-                                   "confirmation_ms, enabled, note FROM alert_rules ORDER BY id"))) {
+                                   "severity, dwell_threshold_ms, speed_threshold_mps, "
+                                   "confirmation_ms, cooldown_ms, enabled, note "
+                                   "FROM alert_rules ORDER BY id"))) {
         setError(error_message,
                  storeText(QT_TRANSLATE_NOOP("HistoryStore", "读取告警规则失败：%1")).arg(query.lastError().text()));
         return std::nullopt;
@@ -1251,9 +1360,12 @@ std::optional<QVector<AlertRule>> HistoryStore::loadAlertRules(QString *error_me
         rule.geofence_id = query.value(3).toLongLong();
         rule.target_types = target_types.value();
         rule.severity = static_cast<AlertSeverity>(severity_value);
-        rule.confirmation_ms = query.value(6).toInt();
-        rule.enabled = query.value(7).toBool();
-        rule.note = query.value(8).toString();
+        rule.dwell_threshold_ms = query.value(6).toInt();
+        rule.speed_threshold_mps = query.value(7).toDouble();
+        rule.confirmation_ms = query.value(8).toInt();
+        rule.cooldown_ms = query.value(9).toInt();
+        rule.enabled = query.value(10).toBool();
+        rule.note = query.value(11).toString();
         const QString validation_error = validateAlertRule(rule);
         if (!validation_error.isEmpty()) {
             setError(error_message, storeText(QT_TRANSLATE_NOOP("HistoryStore", "告警规则 %1 无效：%2"))
@@ -1281,16 +1393,20 @@ std::optional<qint64> HistoryStore::createAlertRule(const AlertRule &rule, QStri
     QSqlQuery query(database);
     query.prepare(QStringLiteral("INSERT INTO alert_rules("
                                  "name, rule_type, geofence_id, target_type_mask, "
-                                 "severity, confirmation_ms, enabled, "
+                                 "severity, dwell_threshold_ms, speed_threshold_mps, "
+                                 "confirmation_ms, cooldown_ms, enabled, "
                                  "note, created_at_ms, updated_at_ms) VALUES(?, ?, ?, ?, "
-                                 "?, ?, ?, ?, ?, ?)"));
+                                 "?, ?, ?, ?, ?, ?, ?, ?, ?)"));
     const qint64 now_ms = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
     query.addBindValue(rule.name.trimmed());
     query.addBindValue(static_cast<int>(rule.type));
     query.addBindValue(rule.geofence_id);
     query.addBindValue(targetTypeMask(rule.target_types));
     query.addBindValue(static_cast<int>(rule.severity));
+    query.addBindValue(rule.dwell_threshold_ms);
+    query.addBindValue(rule.speed_threshold_mps);
     query.addBindValue(rule.confirmation_ms);
+    query.addBindValue(rule.cooldown_ms);
     query.addBindValue(rule.enabled);
     query.addBindValue(rule.note.isNull() ? QStringLiteral("") : rule.note.trimmed());
     query.addBindValue(now_ms);
@@ -1326,15 +1442,19 @@ bool HistoryStore::updateAlertRule(const AlertRule &rule, QString *error_message
     QSqlDatabase database = QSqlDatabase::database(connection_name_);
     QSqlQuery query(database);
     query.prepare(QStringLiteral("UPDATE alert_rules SET name = ?, rule_type = ?, geofence_id = ?, "
-                                 "target_type_mask = ?, severity = ?, confirmation_ms = ?, enabled = ?, "
-                                 "note = ?, "
+                                 "target_type_mask = ?, severity = ?, dwell_threshold_ms = ?, "
+                                 "speed_threshold_mps = ?, confirmation_ms = ?, cooldown_ms = ?, "
+                                 "enabled = ?, note = ?, "
                                  "updated_at_ms = ? WHERE id = ?"));
     query.addBindValue(rule.name.trimmed());
     query.addBindValue(static_cast<int>(rule.type));
     query.addBindValue(rule.geofence_id);
     query.addBindValue(targetTypeMask(rule.target_types));
     query.addBindValue(static_cast<int>(rule.severity));
+    query.addBindValue(rule.dwell_threshold_ms);
+    query.addBindValue(rule.speed_threshold_mps);
     query.addBindValue(rule.confirmation_ms);
+    query.addBindValue(rule.cooldown_ms);
     query.addBindValue(rule.enabled);
     query.addBindValue(rule.note.isNull() ? QStringLiteral("") : rule.note.trimmed());
     query.addBindValue(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());

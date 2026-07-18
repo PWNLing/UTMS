@@ -5,6 +5,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -37,8 +38,30 @@ QString geofenceName(const QVector<Geofence> &geofences, qint64 geofence_id) {
     return geofence == geofences.cend() ? QStringLiteral("#%1").arg(geofence_id) : geofence->name;
 }
 
+QString thresholdText(const AlertRule &rule) {
+    switch (rule.type) {
+    case AlertRuleType::kDwellTimeout:
+        return QCoreApplication::translate("AlertRuleManagerWidget", "%1 秒")
+            .arg(rule.dwell_threshold_ms / 1'000.0, 0, 'f', 1);
+    case AlertRuleType::kGeofenceSpeeding:
+        return QCoreApplication::translate("AlertRuleManagerWidget", "%1 m/s").arg(rule.speed_threshold_mps, 0, 'f', 1);
+    case AlertRuleType::kStableEntry:
+    case AlertRuleType::kStableExit:
+        return QStringLiteral("--");
+    }
+    return QStringLiteral("--");
+}
+
+QString confirmationText(const AlertRule &rule) {
+    if (rule.type == AlertRuleType::kDwellTimeout) {
+        return QCoreApplication::translate("AlertRuleManagerWidget", "不适用");
+    }
+    return QCoreApplication::translate("AlertRuleManagerWidget", "%1 秒")
+        .arg(rule.confirmation_ms / 1'000.0, 0, 'f', 1);
+}
+
 class AlertRuleEditDialog : public QDialog {
-    public:
+  public:
     AlertRuleEditDialog(const QVector<Geofence> &geofences, const std::optional<AlertRule> &existing_rule,
                         QWidget *parent)
         : QDialog(parent), existing_id_(existing_rule.has_value() ? existing_rule->id : 0) {
@@ -51,6 +74,8 @@ class AlertRuleEditDialog : public QDialog {
         type_combo_box_ = new QComboBox(this);
         type_combo_box_->addItem(tr("稳定进入"), static_cast<int>(AlertRuleType::kStableEntry));
         type_combo_box_->addItem(tr("稳定离开"), static_cast<int>(AlertRuleType::kStableExit));
+        type_combo_box_->addItem(tr("围栏内停留超时"), static_cast<int>(AlertRuleType::kDwellTimeout));
+        type_combo_box_->addItem(tr("围栏内超速"), static_cast<int>(AlertRuleType::kGeofenceSpeeding));
         geofence_combo_box_ = new QComboBox(this);
         for (const Geofence &geofence : geofences) {
             geofence_combo_box_->addItem(geofence.name, geofence.id);
@@ -59,12 +84,20 @@ class AlertRuleEditDialog : public QDialog {
         severity_combo_box_->addItem(tr("提示"), static_cast<int>(AlertSeverity::kInfo));
         severity_combo_box_->addItem(tr("警告"), static_cast<int>(AlertSeverity::kWarning));
         severity_combo_box_->addItem(tr("严重"), static_cast<int>(AlertSeverity::kSevere));
+        threshold_label_ = new QLabel(tr("阈值"), this);
+        threshold_spin_box_ = new QDoubleSpinBox(this);
         confirmation_spin_box_ = new QDoubleSpinBox(this);
         confirmation_spin_box_->setRange(0.0, 60.0);
         confirmation_spin_box_->setDecimals(1);
         confirmation_spin_box_->setSingleStep(0.5);
         confirmation_spin_box_->setSuffix(tr(" 秒"));
         confirmation_spin_box_->setValue(1.0);
+        cooldown_spin_box_ = new QDoubleSpinBox(this);
+        cooldown_spin_box_->setRange(0.0, 86'400.0);
+        cooldown_spin_box_->setDecimals(1);
+        cooldown_spin_box_->setSingleStep(1.0);
+        cooldown_spin_box_->setSuffix(tr(" 秒"));
+        cooldown_spin_box_->setValue(30.0);
         enabled_check_box_ = new QCheckBox(tr("启用规则"), this);
         enabled_check_box_->setChecked(true);
         note_line_edit_ = new QLineEdit(this);
@@ -84,7 +117,9 @@ class AlertRuleEditDialog : public QDialog {
         form_layout->addRow(tr("关联围栏"), geofence_combo_box_);
         form_layout->addRow(tr("目标类别"), scope_widget);
         form_layout->addRow(tr("告警等级"), severity_combo_box_);
+        form_layout->addRow(threshold_label_, threshold_spin_box_);
         form_layout->addRow(tr("确认时间"), confirmation_spin_box_);
+        form_layout->addRow(tr("冷却时间"), cooldown_spin_box_);
         form_layout->addRow(enabled_check_box_);
         form_layout->addRow(tr("备注"), note_line_edit_);
 
@@ -95,6 +130,7 @@ class AlertRuleEditDialog : public QDialog {
         auto *button_box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
         connect(button_box, &QDialogButtonBox::accepted, this, &AlertRuleEditDialog::accept);
         connect(button_box, &QDialogButtonBox::rejected, this, &AlertRuleEditDialog::reject);
+        connect(type_combo_box_, &QComboBox::currentIndexChanged, this, [this](int) { updateTypeControls(); });
         layout->addLayout(form_layout);
         layout->addWidget(error_label_);
         layout->addWidget(button_box);
@@ -103,12 +139,13 @@ class AlertRuleEditDialog : public QDialog {
             applyRule(existing_rule.value());
         } else {
             name_line_edit_->setText(tr("新建进入规则"));
+            updateTypeControls();
         }
     }
 
     AlertRule rule() const { return rule_; }
 
-    protected:
+  protected:
     void accept() override {
         AlertRule candidate;
         candidate.id = existing_id_;
@@ -121,7 +158,16 @@ class AlertRuleEditDialog : public QDialog {
             }
         }
         candidate.severity = static_cast<AlertSeverity>(severity_combo_box_->currentData().toInt());
-        candidate.confirmation_ms = qRound(confirmation_spin_box_->value() * 1'000.0);
+        if (candidate.type == AlertRuleType::kDwellTimeout) {
+            candidate.dwell_threshold_ms = qRound(threshold_spin_box_->value() * 1'000.0);
+            candidate.confirmation_ms = 0;
+        } else {
+            candidate.confirmation_ms = qRound(confirmation_spin_box_->value() * 1'000.0);
+        }
+        if (candidate.type == AlertRuleType::kGeofenceSpeeding) {
+            candidate.speed_threshold_mps = threshold_spin_box_->value();
+        }
+        candidate.cooldown_ms = qRound(cooldown_spin_box_->value() * 1'000.0);
         candidate.enabled = enabled_check_box_->isChecked();
         candidate.note = note_line_edit_->text().trimmed();
 
@@ -135,18 +181,50 @@ class AlertRuleEditDialog : public QDialog {
         QDialog::accept();
     }
 
-    private:
+  private:
     void applyRule(const AlertRule &rule) {
         name_line_edit_->setText(rule.name);
         type_combo_box_->setCurrentIndex(type_combo_box_->findData(static_cast<int>(rule.type)));
         geofence_combo_box_->setCurrentIndex(geofence_combo_box_->findData(rule.geofence_id));
         severity_combo_box_->setCurrentIndex(severity_combo_box_->findData(static_cast<int>(rule.severity)));
+        updateTypeControls();
+        if (rule.type == AlertRuleType::kDwellTimeout) {
+            threshold_spin_box_->setValue(rule.dwell_threshold_ms / 1'000.0);
+        } else if (rule.type == AlertRuleType::kGeofenceSpeeding) {
+            threshold_spin_box_->setValue(rule.speed_threshold_mps);
+        }
         confirmation_spin_box_->setValue(rule.confirmation_ms / 1'000.0);
+        cooldown_spin_box_->setValue(rule.cooldown_ms / 1'000.0);
         enabled_check_box_->setChecked(rule.enabled);
         note_line_edit_->setText(rule.note);
         for (std::size_t index = 0; index < kTargetTypes.size(); ++index) {
             target_type_check_boxes_[index]->setChecked(std::find(rule.target_types.cbegin(), rule.target_types.cend(),
                                                                   kTargetTypes[index]) != rule.target_types.cend());
+        }
+    }
+
+    void updateTypeControls() {
+        const AlertRuleType type = static_cast<AlertRuleType>(type_combo_box_->currentData().toInt());
+        const bool has_threshold = type == AlertRuleType::kDwellTimeout || type == AlertRuleType::kGeofenceSpeeding;
+        threshold_label_->setVisible(has_threshold);
+        threshold_spin_box_->setVisible(has_threshold);
+        confirmation_spin_box_->setEnabled(type != AlertRuleType::kDwellTimeout);
+        confirmation_spin_box_->setToolTip(
+            type == AlertRuleType::kDwellTimeout ? tr("停留规则达到停留阈值后直接触发，不叠加确认时间") : QString());
+        if (type == AlertRuleType::kDwellTimeout) {
+            threshold_label_->setText(tr("停留阈值"));
+            threshold_spin_box_->setRange(5.0, 86'400.0);
+            threshold_spin_box_->setDecimals(1);
+            threshold_spin_box_->setSingleStep(1.0);
+            threshold_spin_box_->setSuffix(tr(" 秒"));
+            threshold_spin_box_->setValue(5.0);
+        } else if (type == AlertRuleType::kGeofenceSpeeding) {
+            threshold_label_->setText(tr("超速阈值"));
+            threshold_spin_box_->setRange(0.1, 1'000'000.0);
+            threshold_spin_box_->setDecimals(1);
+            threshold_spin_box_->setSingleStep(0.5);
+            threshold_spin_box_->setSuffix(tr(" m/s"));
+            threshold_spin_box_->setValue(10.0);
         }
     }
 
@@ -157,7 +235,10 @@ class AlertRuleEditDialog : public QDialog {
     QComboBox *geofence_combo_box_ = nullptr;
     std::array<QCheckBox *, 5> target_type_check_boxes_{};
     QComboBox *severity_combo_box_ = nullptr;
+    QLabel *threshold_label_ = nullptr;
+    QDoubleSpinBox *threshold_spin_box_ = nullptr;
     QDoubleSpinBox *confirmation_spin_box_ = nullptr;
+    QDoubleSpinBox *cooldown_spin_box_ = nullptr;
     QCheckBox *enabled_check_box_ = nullptr;
     QLineEdit *note_line_edit_ = nullptr;
     QLabel *error_label_ = nullptr;
@@ -177,9 +258,9 @@ AlertRuleManagerWidget::AlertRuleManagerWidget(QWidget *parent)
     button_layout->addWidget(delete_button_);
     button_layout->addStretch();
 
-    table_widget_->setColumnCount(7);
-    table_widget_->setHorizontalHeaderLabels(
-        {tr("名称"), tr("类型"), tr("围栏"), tr("类别范围"), tr("等级"), tr("确认"), tr("状态")});
+    table_widget_->setColumnCount(9);
+    table_widget_->setHorizontalHeaderLabels({tr("名称"), tr("类型"), tr("围栏"), tr("类别范围"), tr("等级"),
+                                              tr("阈值"), tr("确认"), tr("冷却"), tr("状态")});
     table_widget_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     for (int column = 1; column < table_widget_->columnCount(); ++column) {
         table_widget_->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
@@ -221,14 +302,15 @@ void AlertRuleManagerWidget::setRules(const QVector<AlertRule> &rules) {
         table_widget_->setItem(row, 2, new QTableWidgetItem(geofenceName(geofences_, rule.geofence_id)));
         table_widget_->setItem(row, 3, new QTableWidgetItem(targetTypeScopeText(rule.target_types)));
         table_widget_->setItem(row, 4, new QTableWidgetItem(alertSeverityDisplayName(rule.severity)));
-        table_widget_->setItem(row, 5,
-                               new QTableWidgetItem(tr("%1 秒").arg(rule.confirmation_ms / 1'000.0, 0, 'f', 1)));
-        table_widget_->setItem(row, 6, new QTableWidgetItem(rule.enabled ? tr("启用") : tr("禁用")));
+        table_widget_->setItem(row, 5, new QTableWidgetItem(thresholdText(rule)));
+        table_widget_->setItem(row, 6, new QTableWidgetItem(confirmationText(rule)));
+        table_widget_->setItem(row, 7, new QTableWidgetItem(tr("%1 秒").arg(rule.cooldown_ms / 1'000.0, 0, 'f', 1)));
+        table_widget_->setItem(row, 8, new QTableWidgetItem(rule.enabled ? tr("启用") : tr("禁用")));
         if (selected.has_value() && selected->id == rule.id) {
             table_widget_->selectRow(row);
         }
     }
-    showStatus(tr("共 %1 条进入/离开规则").arg(rules_.size()), false);
+    showStatus(tr("共 %1 条告警规则").arg(rules_.size()), false);
     updateActions();
 }
 

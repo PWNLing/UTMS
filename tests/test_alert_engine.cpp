@@ -1,6 +1,8 @@
 #include <QtTest>
 
 #include <cmath>
+#include <limits>
+#include <optional>
 
 #include "alert/AlertEngine.h"
 #include "alert/AlertWorker.h"
@@ -27,11 +29,13 @@ utms::AlertRule makeEntryRule() {
     return rule;
 }
 
-utms::RadarFrame makeFrame(qint64 time_ms, qint64 track_id, utms::TargetType type, double latitude, double longitude) {
+utms::RadarFrame makeFrame(qint64 time_ms, qint64 track_id, utms::TargetType type, double latitude, double longitude,
+                           std::optional<double> velocity_mps = std::nullopt) {
     utms::TrackData track;
     track.track_id = track_id;
     track.type = type;
     track.position = {latitude, longitude};
+    track.velocity_mps = velocity_mps;
 
     utms::RadarFrame frame;
     frame.received_at = QDateTime::fromMSecsSinceEpoch(time_ms, QTimeZone::UTC);
@@ -45,12 +49,17 @@ utms::RadarFrame makeFrame(qint64 time_ms, qint64 track_id, utms::TargetType typ
 class AlertEngineTest : public QObject {
     Q_OBJECT
 
-    private slots:
+  private slots:
     void stableEntryRequiresConfirmationAndHonorsCategoryScope();
     void entrySupportsAllEnabledGeofenceShapes();
     void stableExitRequiresInsideBaselineMarginAndConfirmation();
     void disappearanceHoldsStateForThreeSecondsWithoutSynthesizingExit();
     void disablingGeofenceClearsHeldMembershipState();
+    void dwellTimeoutUsesOnlyItsThresholdAndDeduplicatesContinuousPresence();
+    void geofenceSpeedingRequiresInsideVelocityAndConfirmation();
+    void recoveredConditionRetriggersOnlyAfterCooldown();
+    void unchangedRuleRefreshPreservesContinuousAndCooldownState();
+    void ruleValidationEnforcesDwellSpeedAndCooldownRanges();
     void workerEvaluatesFramesOffTheCallingThread();
 };
 
@@ -178,10 +187,8 @@ void AlertEngineTest::disappearanceHoldsStateForThreeSecondsWithoutSynthesizingE
     expired_entry_engine.setGeofences({makeCircleGeofence()});
     expired_entry_engine.setRules({makeEntryRule()});
     QVERIFY(expired_entry_engine.evaluateFrame(makeFrame(0, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
-    QVERIFY(
-        expired_entry_engine.evaluateFrame(makeFrame(3'001, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
-    QCOMPARE(expired_entry_engine.evaluateFrame(makeFrame(4'001, 42, utms::TargetType::kCar, 25.31, 110.41)).size(),
-             1);
+    QVERIFY(expired_entry_engine.evaluateFrame(makeFrame(3'001, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    QCOMPARE(expired_entry_engine.evaluateFrame(makeFrame(4'001, 42, utms::TargetType::kCar, 25.31, 110.41)).size(), 1);
 }
 
 void AlertEngineTest::disablingGeofenceClearsHeldMembershipState() {
@@ -202,6 +209,133 @@ void AlertEngineTest::disablingGeofenceClearsHeldMembershipState() {
     geofence.enabled = true;
     engine.setGeofences({geofence});
     QVERIFY(engine.evaluateFrame(makeFrame(200, 42, utms::TargetType::kCar, 25.312, 110.41)).isEmpty());
+}
+
+void AlertEngineTest::dwellTimeoutUsesOnlyItsThresholdAndDeduplicatesContinuousPresence() {
+    utms::AlertRule rule = makeEntryRule();
+    rule.id = 17;
+    rule.type = utms::AlertRuleType::kDwellTimeout;
+    rule.dwell_threshold_ms = 5'000;
+    rule.confirmation_ms = 60'000;
+    rule.cooldown_ms = 0;
+
+    utms::AlertEngine engine;
+    engine.setGeofences({makeCircleGeofence()});
+    engine.setRules({rule});
+
+    QVERIFY(engine.evaluateFrame(makeFrame(0, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(2'500, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(4'999, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    const QVector<utms::TargetAlert> first_alerts =
+        engine.evaluateFrame(makeFrame(5'000, 42, utms::TargetType::kCar, 25.31, 110.41));
+    QCOMPARE(first_alerts.size(), 1);
+    QCOMPARE(first_alerts.constFirst().rule_type, utms::AlertRuleType::kDwellTimeout);
+    QVERIFY(engine.evaluateFrame(makeFrame(6'000, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+
+    QVERIFY(engine.evaluateFrame(makeFrame(6'100, 42, utms::TargetType::kCar, 25.312, 110.41)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(6'200, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(8'700, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    QCOMPARE(engine.evaluateFrame(makeFrame(11'200, 42, utms::TargetType::kCar, 25.31, 110.41)).size(), 1);
+}
+
+void AlertEngineTest::geofenceSpeedingRequiresInsideVelocityAndConfirmation() {
+    utms::AlertRule rule = makeEntryRule();
+    rule.id = 18;
+    rule.type = utms::AlertRuleType::kGeofenceSpeeding;
+    rule.speed_threshold_mps = 10.0;
+    rule.confirmation_ms = 1'000;
+    rule.cooldown_ms = 0;
+
+    utms::AlertEngine engine;
+    engine.setGeofences({makeCircleGeofence()});
+    engine.setRules({rule});
+
+    QVERIFY(engine.evaluateFrame(makeFrame(0, 42, utms::TargetType::kCar, 25.312, 110.41, 20.0)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(100, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(200, 42, utms::TargetType::kCar, 25.31, 110.41, 10.0)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(300, 42, utms::TargetType::kCar, 25.31, 110.41, 10.1)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(1'299, 42, utms::TargetType::kCar, 25.31, 110.41, 12.0)).isEmpty());
+
+    const QVector<utms::TargetAlert> first_alerts =
+        engine.evaluateFrame(makeFrame(1'300, 42, utms::TargetType::kCar, 25.31, 110.41, 12.0));
+    QCOMPARE(first_alerts.size(), 1);
+    QCOMPARE(first_alerts.constFirst().velocity_mps, std::optional<double>(12.0));
+    QVERIFY(engine.evaluateFrame(makeFrame(2'000, 42, utms::TargetType::kCar, 25.31, 110.41, 30.0)).isEmpty());
+
+    QVERIFY(engine.evaluateFrame(makeFrame(2'100, 42, utms::TargetType::kCar, 25.31, 110.41, 9.0)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(2'200, 42, utms::TargetType::kCar, 25.31, 110.41, 11.0)).isEmpty());
+    QCOMPARE(engine.evaluateFrame(makeFrame(3'200, 42, utms::TargetType::kCar, 25.31, 110.41, 11.0)).size(), 1);
+}
+
+void AlertEngineTest::recoveredConditionRetriggersOnlyAfterCooldown() {
+    utms::AlertRule rule = makeEntryRule();
+    rule.confirmation_ms = 0;
+    rule.cooldown_ms = 30'000;
+
+    utms::AlertEngine engine;
+    engine.setGeofences({makeCircleGeofence()});
+    engine.setRules({rule});
+
+    QCOMPARE(engine.evaluateFrame(makeFrame(0, 42, utms::TargetType::kCar, 25.31, 110.41)).size(), 1);
+    QVERIFY(engine.evaluateFrame(makeFrame(100, 42, utms::TargetType::kCar, 25.312, 110.41)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(1'000, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    QVERIFY(engine.evaluateFrame(makeFrame(29'999, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    QCOMPARE(engine.evaluateFrame(makeFrame(30'000, 42, utms::TargetType::kCar, 25.31, 110.41)).size(), 1);
+}
+
+void AlertEngineTest::unchangedRuleRefreshPreservesContinuousAndCooldownState() {
+    utms::AlertRule rule = makeEntryRule();
+    rule.confirmation_ms = 0;
+    rule.cooldown_ms = 30'000;
+
+    utms::AlertEngine engine;
+    engine.setGeofences({makeCircleGeofence()});
+    engine.setRules({rule});
+
+    QCOMPARE(engine.evaluateFrame(makeFrame(0, 42, utms::TargetType::kCar, 25.31, 110.41)).size(), 1);
+    for (qint64 time_ms = 3'000; time_ms <= 30'000; time_ms += 3'000) {
+        if (time_ms == 15'000) {
+            engine.setRules({rule});
+        }
+        QVERIFY(engine.evaluateFrame(makeFrame(time_ms, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+    }
+
+    utms::AlertEngine recovered_engine;
+    recovered_engine.setGeofences({makeCircleGeofence()});
+    recovered_engine.setRules({rule});
+    QCOMPARE(recovered_engine.evaluateFrame(makeFrame(0, 42, utms::TargetType::kCar, 25.31, 110.41)).size(), 1);
+    QVERIFY(recovered_engine.evaluateFrame(makeFrame(100, 42, utms::TargetType::kCar, 25.312, 110.41)).isEmpty());
+    recovered_engine.setRules({rule});
+    QVERIFY(recovered_engine.evaluateFrame(makeFrame(200, 42, utms::TargetType::kCar, 25.31, 110.41)).isEmpty());
+}
+
+void AlertEngineTest::ruleValidationEnforcesDwellSpeedAndCooldownRanges() {
+    utms::AlertRule rule = makeEntryRule();
+
+    rule.type = utms::AlertRuleType::kDwellTimeout;
+    rule.dwell_threshold_ms = 4'999;
+    QVERIFY(!utms::validateAlertRule(rule).isEmpty());
+    rule.dwell_threshold_ms = 5'000;
+    QVERIFY(utms::validateAlertRule(rule).isEmpty());
+    rule.dwell_threshold_ms = 86'400'001;
+    QVERIFY(!utms::validateAlertRule(rule).isEmpty());
+
+    rule.type = utms::AlertRuleType::kGeofenceSpeeding;
+    rule.dwell_threshold_ms = 5'000;
+    rule.speed_threshold_mps = 0.0;
+    QVERIFY(!utms::validateAlertRule(rule).isEmpty());
+    rule.speed_threshold_mps = 0.1;
+    QVERIFY(utms::validateAlertRule(rule).isEmpty());
+    rule.speed_threshold_mps = std::numeric_limits<double>::infinity();
+    QVERIFY(!utms::validateAlertRule(rule).isEmpty());
+
+    rule.speed_threshold_mps = 10.0;
+    rule.cooldown_ms = -1;
+    QVERIFY(!utms::validateAlertRule(rule).isEmpty());
+    rule.cooldown_ms = 86'400'000;
+    QVERIFY(utms::validateAlertRule(rule).isEmpty());
+    rule.cooldown_ms = 86'400'001;
+    QVERIFY(!utms::validateAlertRule(rule).isEmpty());
 }
 
 void AlertEngineTest::workerEvaluatesFramesOffTheCallingThread() {

@@ -1,6 +1,7 @@
 #include "alert/AlertTypes.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <QCoreApplication>
 
@@ -12,6 +13,10 @@ QString alertRuleTypeDisplayName(AlertRuleType type) {
         return QCoreApplication::translate("AlertTypes", "稳定进入");
     case AlertRuleType::kStableExit:
         return QCoreApplication::translate("AlertTypes", "稳定离开");
+    case AlertRuleType::kDwellTimeout:
+        return QCoreApplication::translate("AlertTypes", "围栏内停留超时");
+    case AlertRuleType::kGeofenceSpeeding:
+        return QCoreApplication::translate("AlertTypes", "围栏内超速");
     }
     return QCoreApplication::translate("AlertTypes", "未知规则");
 }
@@ -43,8 +48,28 @@ QString validateAlertRule(const AlertRule &rule) {
             return QCoreApplication::translate("AlertTypes", "规则包含无效目标类别");
         }
     }
+    switch (rule.type) {
+    case AlertRuleType::kStableEntry:
+    case AlertRuleType::kStableExit:
+        break;
+    case AlertRuleType::kDwellTimeout:
+        if (rule.dwell_threshold_ms < 5'000 || rule.dwell_threshold_ms > 86'400'000) {
+            return QCoreApplication::translate("AlertTypes", "停留阈值必须为 5 秒–24 小时");
+        }
+        break;
+    case AlertRuleType::kGeofenceSpeeding:
+        if (!std::isfinite(rule.speed_threshold_mps) || rule.speed_threshold_mps <= 0.0) {
+            return QCoreApplication::translate("AlertTypes", "超速阈值必须为大于 0 的有限数值（m/s）");
+        }
+        break;
+    default:
+        return QCoreApplication::translate("AlertTypes", "规则类型无效");
+    }
     if (rule.confirmation_ms < 0 || rule.confirmation_ms > 60'000) {
         return QCoreApplication::translate("AlertTypes", "确认时间必须为 0–60 秒");
+    }
+    if (rule.cooldown_ms < 0 || rule.cooldown_ms > 86'400'000) {
+        return QCoreApplication::translate("AlertTypes", "冷却时间必须为 0 秒–24 小时");
     }
     return {};
 }

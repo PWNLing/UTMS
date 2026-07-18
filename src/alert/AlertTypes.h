@@ -9,7 +9,7 @@
 
 namespace utms {
 
-enum class AlertRuleType { kStableEntry, kStableExit };
+enum class AlertRuleType { kStableEntry, kStableExit, kDwellTimeout, kGeofenceSpeeding };
 
 enum class AlertSeverity { kInfo, kWarning, kSevere };
 
@@ -20,7 +20,10 @@ struct AlertRule {
     qint64 geofence_id = 0;
     QVector<TargetType> target_types;
     AlertSeverity severity = AlertSeverity::kWarning;
+    int dwell_threshold_ms = 5'000;
+    double speed_threshold_mps = 1.0;
     int confirmation_ms = 1'000;
+    int cooldown_ms = 30'000;
     bool enabled = true;
     QString note;
 };

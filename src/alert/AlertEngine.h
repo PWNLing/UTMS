@@ -31,10 +31,13 @@ class AlertEngine {
     static double outsideDistanceMeters(const Geofence &geofence, const GeoPosition &position);
     static TargetAlert createAlert(const AlertRule &rule, const Geofence &geofence, const TrackData &track,
                                    const QDateTime &occurred_at);
+    bool appendAlertIfCooldownElapsed(const AlertRule &rule, const Geofence &geofence, const TrackData &track,
+                                      const QDateTime &occurred_at, QVector<TargetAlert> *alerts);
 
     QHash<qint64, Geofence> geofences_by_id_;
     QVector<AlertRule> rules_;
     QHash<qint64, QHash<qint64, RuleTrackState>> states_by_rule_;
+    QHash<qint64, QHash<qint64, QDateTime>> last_alerts_by_rule_;
 };
 
 } // namespace utms

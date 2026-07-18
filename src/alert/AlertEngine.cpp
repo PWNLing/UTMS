@@ -126,6 +126,13 @@ bool geometriesEqual(const GeofenceGeometry &left, const GeofenceGeometry &right
     return true;
 }
 
+bool evaluationConditionsEqual(const AlertRule &left, const AlertRule &right) {
+    return left.type == right.type && left.geofence_id == right.geofence_id &&
+           left.target_types == right.target_types && left.dwell_threshold_ms == right.dwell_threshold_ms &&
+           left.speed_threshold_mps == right.speed_threshold_mps && left.confirmation_ms == right.confirmation_ms &&
+           left.enabled == right.enabled;
+}
+
 } // namespace
 
 void AlertEngine::setGeofences(const QVector<Geofence> &geofences) {
@@ -151,13 +158,29 @@ void AlertEngine::setGeofences(const QVector<Geofence> &geofences) {
 }
 
 void AlertEngine::setRules(const QVector<AlertRule> &rules) {
-    rules_.clear();
+    QVector<AlertRule> next_rules;
     for (const AlertRule &rule : rules) {
         if (validateAlertRule(rule).isEmpty()) {
-            rules_.append(rule);
+            next_rules.append(rule);
         }
     }
-    states_by_rule_.clear();
+
+    QSet<qint64> next_rule_ids;
+    for (const AlertRule &rule : std::as_const(next_rules)) {
+        next_rule_ids.insert(rule.id);
+        const auto previous = std::find_if(rules_.cbegin(), rules_.cend(),
+                                           [&rule](const AlertRule &candidate) { return candidate.id == rule.id; });
+        if (previous == rules_.cend() || !evaluationConditionsEqual(*previous, rule)) {
+            states_by_rule_.remove(rule.id);
+        }
+    }
+    for (const AlertRule &rule : std::as_const(rules_)) {
+        if (!next_rule_ids.contains(rule.id)) {
+            states_by_rule_.remove(rule.id);
+            last_alerts_by_rule_.remove(rule.id);
+        }
+    }
+    rules_ = std::move(next_rules);
 }
 
 QVector<TargetAlert> AlertEngine::evaluateFrame(const RadarFrame &frame) {
@@ -203,8 +226,43 @@ QVector<TargetAlert> AlertEngine::evaluateFrame(const RadarFrame &frame) {
                     state.candidate_since = frame.received_at;
                 }
                 if (!state.triggered && state.candidate_since->msecsTo(frame.received_at) >= rule.confirmation_ms) {
-                    alerts.append(createAlert(rule, geofence_iterator.value(), track, frame.received_at));
-                    state.triggered = true;
+                    state.triggered = appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track,
+                                                                   frame.received_at, &alerts);
+                }
+                continue;
+            }
+
+            if (rule.type == AlertRuleType::kDwellTimeout) {
+                if (!inside) {
+                    state.candidate_since.reset();
+                    state.triggered = false;
+                    continue;
+                }
+                if (!state.candidate_since.has_value()) {
+                    state.candidate_since = frame.received_at;
+                }
+                if (!state.triggered && state.candidate_since->msecsTo(frame.received_at) >= rule.dwell_threshold_ms) {
+                    state.triggered = appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track,
+                                                                   frame.received_at, &alerts);
+                }
+                continue;
+            }
+
+            if (rule.type == AlertRuleType::kGeofenceSpeeding) {
+                const bool speeding = inside && track.velocity_mps.has_value() &&
+                                      std::isfinite(track.velocity_mps.value()) &&
+                                      track.velocity_mps.value() > rule.speed_threshold_mps;
+                if (!speeding) {
+                    state.candidate_since.reset();
+                    state.triggered = false;
+                    continue;
+                }
+                if (!state.candidate_since.has_value()) {
+                    state.candidate_since = frame.received_at;
+                }
+                if (!state.triggered && state.candidate_since->msecsTo(frame.received_at) >= rule.confirmation_ms) {
+                    state.triggered = appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track,
+                                                                   frame.received_at, &alerts);
                 }
                 continue;
             }
@@ -230,9 +288,10 @@ QVector<TargetAlert> AlertEngine::evaluateFrame(const RadarFrame &frame) {
                 state.candidate_since = frame.received_at;
             }
             if (state.candidate_since->msecsTo(frame.received_at) >= rule.confirmation_ms) {
-                alerts.append(createAlert(rule, geofence_iterator.value(), track, frame.received_at));
-                state.inside_confirmed = false;
-                state.triggered = true;
+                if (appendAlertIfCooldownElapsed(rule, geofence_iterator.value(), track, frame.received_at, &alerts)) {
+                    state.inside_confirmed = false;
+                    state.triggered = true;
+                }
             }
         }
         for (auto state_iterator = rule_states.begin(); state_iterator != rule_states.end();) {
@@ -247,7 +306,10 @@ QVector<TargetAlert> AlertEngine::evaluateFrame(const RadarFrame &frame) {
     return alerts;
 }
 
-void AlertEngine::clearEvaluationState() { states_by_rule_.clear(); }
+void AlertEngine::clearEvaluationState() {
+    states_by_rule_.clear();
+    last_alerts_by_rule_.clear();
+}
 
 bool AlertEngine::appliesToTarget(const AlertRule &rule, TargetType type) {
     return std::find(rule.target_types.cbegin(), rule.target_types.cend(), type) != rule.target_types.cend();
@@ -299,10 +361,44 @@ TargetAlert AlertEngine::createAlert(const AlertRule &rule, const Geofence &geof
     alert.position = track.position;
     alert.velocity_mps = track.velocity_mps;
     alert.distance_m = track.distance_m;
-    alert.description = QCoreApplication::translate("AlertEngine", "目标 %1 %2围栏“%3”")
-                            .arg(track.track_id)
-                            .arg(alertRuleTypeDisplayName(rule.type), geofence.name);
+    switch (rule.type) {
+    case AlertRuleType::kStableEntry:
+    case AlertRuleType::kStableExit:
+        alert.description = QCoreApplication::translate("AlertEngine", "目标 %1 %2围栏“%3”")
+                                .arg(track.track_id)
+                                .arg(alertRuleTypeDisplayName(rule.type), geofence.name);
+        break;
+    case AlertRuleType::kDwellTimeout:
+        alert.description = QCoreApplication::translate("AlertEngine", "目标 %1 在围栏“%2”内停留超过 %3 秒")
+                                .arg(track.track_id)
+                                .arg(geofence.name)
+                                .arg(rule.dwell_threshold_ms / 1'000.0, 0, 'f', 1);
+        break;
+    case AlertRuleType::kGeofenceSpeeding:
+        alert.description =
+            QCoreApplication::translate("AlertEngine", "目标 %1 在围栏“%2”内速度 %3 m/s 超过阈值 %4 m/s")
+                .arg(track.track_id)
+                .arg(geofence.name)
+                .arg(track.velocity_mps.value_or(0.0), 0, 'f', 1)
+                .arg(rule.speed_threshold_mps, 0, 'f', 1);
+        break;
+    }
     return alert;
+}
+
+bool AlertEngine::appendAlertIfCooldownElapsed(const AlertRule &rule, const Geofence &geofence, const TrackData &track,
+                                               const QDateTime &occurred_at, QVector<TargetAlert> *alerts) {
+    const auto rule_alerts = last_alerts_by_rule_.constFind(rule.id);
+    if (rule_alerts != last_alerts_by_rule_.cend()) {
+        const auto last_alert = rule_alerts->constFind(track.track_id);
+        if (last_alert != rule_alerts->cend() && last_alert->isValid() &&
+            last_alert->msecsTo(occurred_at) < rule.cooldown_ms) {
+            return false;
+        }
+    }
+    alerts->append(createAlert(rule, geofence, track, occurred_at));
+    last_alerts_by_rule_[rule.id].insert(track.track_id, occurred_at);
+    return true;
 }
 
 } // namespace utms
