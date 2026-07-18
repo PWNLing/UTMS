@@ -28,6 +28,9 @@ namespace {
 } // namespace
 
 int main(int argc, char *argv[]) {
+    if (qEnvironmentVariableIsEmpty("QTWEBENGINE_CHROMIUM_FLAGS")) {
+        qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--log-level=3");
+    }
     QApplication a(argc, argv);
     const QString log_directory = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("logs"));
     if (!utms::Logger::install(log_directory)) {
